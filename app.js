@@ -1,4 +1,4 @@
-let config,engines=[
+let config,theme="system",engines=[
 {name:"Google",url:"https://www.google.com/search?q=",keyword:"g"},
 {name:"Bing",url:"https://www.bing.com/search?q=",keyword:"b"},
 {name:"DuckDuckGo",url:"https://duckduckgo.com/?q=",keyword:"ddg"},
@@ -6,8 +6,31 @@ let config,engines=[
 {name:"GitHub",url:"https://github.com/search?q=",keyword:"gh"}
 ],editIndex=-1,layout={columns:6,hide:false};
 
+function applyTheme(){
+
+let mode=localStorage.getItem("theme")||"system";
+
+document.body.classList.remove("dark");
+
+
+if(mode==="dark"){
+
+document.body.classList.add("dark");
+
+}
+
+
+if(mode==="system" &&
+window.matchMedia("(prefers-color-scheme:dark)").matches){
+
+document.body.classList.add("dark");
+
+}
+
+}
 
 async function load(){
+applyTheme();
 let saved=localStorage.getItem("homepage");
 config=saved?JSON.parse(saved):await fetch("config.json").then(r=>r.json());
 
@@ -234,6 +257,9 @@ renderEngines();
 name.value="";
 url.value="";
 key.value="";
+
+document.getElementById("engine-form")
+.classList.remove("show");
 }
 
 
@@ -266,6 +292,8 @@ render();
 name.value="";
 url.value="";
 
+document.getElementById("site-form")
+.classList.remove("show");
 }
 
 
@@ -788,6 +816,10 @@ panel.style.display==="block"?
 
 if(panel.style.display==="block"){
 
+let t=document.getElementById("theme-mode");
+
+t.value=localStorage.getItem("theme")||"system";
+
 renderEngineList();
 
 renderEditor();
@@ -837,6 +869,13 @@ box.classList.contains("open")?
 document.getElementById("save-engine").onclick=
 addEngine;
 
+document.getElementById("show-engine-form").onclick=function(){
+
+document.getElementById("engine-form")
+.classList.toggle("show");
+
+};
+
 
 document.getElementById("engine").onchange=function(){
 
@@ -869,17 +908,30 @@ document.getElementById(
 
 
 
-document.getElementById("save-card")
-.onclick=saveCard;
+document.getElementById("save-card").onclick=saveCard;
+document.getElementById("cancel-card").onclick=closeCardEditor;
 
+function cancelForm(form,inputs){
+    document.getElementById(form).classList.remove("show");
+    inputs.forEach(id=>document.getElementById(id).value="");
+}
 
-document.getElementById("cancel-card")
-.onclick=closeCardEditor;
+document.getElementById("cancel-engine").onclick=()=>{
+    cancelForm("engine-form",[
+        "engine-name",
+        "engine-url",
+        "engine-keyword"
+    ]);
+};
 
+document.getElementById("cancel-site").onclick=()=>{
+    cancelForm("site-form",[
+        "site-name",
+        "site-url"
+    ]);
+};
 
-
-document.getElementById("export-data")
-.onclick=exportData;
+document.getElementById("export-data").onclick=exportData;
 
 
 
@@ -900,7 +952,25 @@ document.getElementById("card-columns")
 document.getElementById("hide-cards")
 .onchange=updateLayout;
 
+document.getElementById("theme-mode").onchange=function(){
+
+localStorage.setItem(
+"theme",
+this.value
+);
+
+applyTheme();
+
+};
+
 document.getElementById("save-site").onclick=addSite;
+
+document.getElementById("show-site-form").onclick=function(){
+
+document.getElementById("site-form")
+.classList.toggle("show");
+
+};
 
 
 document.getElementById("search").onsubmit=e=>{
