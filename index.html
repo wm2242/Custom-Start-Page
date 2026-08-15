@@ -30,13 +30,37 @@
 
 <h3>添加搜索引擎</h3>
 
-<input id="engine-name" placeholder="搜索引擎名称">
-<input id="engine-url" placeholder="https://example.com/search?q=">
-<input id="engine-keyword" placeholder="快捷关键词（可为空）">
+<button id="show-engine-form">
+＋ 添加搜索引擎
+</button>
+
+
+<div id="engine-form" class="add-form">
+
+<input id="engine-name"
+placeholder="搜索引擎名称">
+
+<input id="engine-url"
+placeholder="搜索地址">
+
+
+<input id="engine-keyword"
+placeholder="快捷关键词">
+
+
+<div class="form-buttons">
 
 <button id="save-engine">
-添加搜索引擎
+保存
 </button>
+
+<button id="cancel-engine">
+取消
+</button>
+
+</div>
+
+</div>
 
 
 <h3 class="collapse-title" data-target="editor">
@@ -46,13 +70,44 @@
 <div id="editor" class="collapse-box"></div>
 
 
-<input id="site-name" placeholder="网站名称">
+<button id="show-site-form">
+＋ 添加网站
+</button>
 
-<input id="site-url" placeholder="网站地址">
+
+<div id="site-form" class="add-form">
+
+<input id="site-name"
+placeholder="网站名称">
+
+
+<input id="site-url"
+placeholder="网站地址">
+
+
+<div class="form-buttons">
 
 <button id="save-site">
-添加网站
+保存
 </button>
+
+
+<button id="cancel-site">
+取消
+</button>
+
+</div>
+
+</div>
+
+
+<h3>主题设置</h3>
+
+<select id="theme-mode">
+<option value="system">system</option>
+<option value="light">light</option>
+<option value="dark">dark</option>
+</select>
 
 
 <h3>卡片显示</h3>
