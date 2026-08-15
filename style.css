@@ -6,14 +6,14 @@
 --border:#e0e0e6;
 }
 
-@media(prefers-color-scheme:dark){
-:root{
+body.dark{
+
 --bg:#2b2a33;
 --card:#42414d;
 --text:#fbfbfe;
 --secondary:#cfcfd8;
 --border:#5b5b66;
-}
+
 }
 
 *{
@@ -592,9 +592,34 @@ box-shadow:0 1px 3px rgba(0,0,0,.25);
 }
 
 .switch input:checked + .slider{
-background:#4b5563;
+background:#3b82f6;
+}
+
+body.dark .switch input:checked + .slider{
+background:#3a5f8a;
 }
 
 .switch input:checked + .slider:before{
 transform:translateX(20px);
+}
+
+.add-form{
+display:none;
+margin-top:10px;
+}
+
+
+.add-form.show{
+display:block;
+}
+
+
+.form-buttons{
+display:flex;
+gap:10px;
+}
+
+
+.form-buttons button{
+flex:1;
 }
