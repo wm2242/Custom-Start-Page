@@ -9,7 +9,7 @@
 </head>
 <body>
 
-<button id="settings" class="settings-btn" data-i18n-title="settings" title="设置">
+<button id="settings" class="settings-btn" data-i18n-title="settings" title="设置" aria-haspopup="true" aria-expanded="false" aria-controls="panel">
 <svg viewBox="0 0 24 24">
 <path d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.4 7.4 0 0 0-1.69-.98L14.5 2.42a.5.5 0 0 0-.5-.42h-4a.5.5 0 0 0-.5.42L9.12 5.1a7.4 7.4 0 0 0-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.04.32-.07.65-.07.98s.02.66.07.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.68c.05.24.25.42.5.42h4c.25 0 .45-.18.5-.42l.38-2.68c.61-.25 1.17-.58 1.69-.98l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z"/>
 </svg>
@@ -30,7 +30,7 @@
 </select>
 
 
-<h3 class="collapse-title" data-target="engine-list">
+<h3 class="collapse-title" data-target="engine-list" data-action="collapse" tabindex="0" role="button" aria-expanded="false">
 <span data-i18n="engine_manage">搜索引擎管理</span> <span>⌄</span>
 </h3>
 
@@ -73,7 +73,7 @@ placeholder="快捷关键词">
 </div>
 
 
-<h3 class="collapse-title" data-target="editor">
+<h3 class="collapse-title" data-target="editor" data-action="collapse" tabindex="0" role="button" aria-expanded="false">
 <span data-i18n="card_manage">导航卡片管理</span> <span>⌄</span>
 </h3>
 
@@ -248,7 +248,9 @@ autofocus>
 </svg>
 </button>
 <button id="search-engine-btn"
-type="button">
+type="button"
+data-i18n-title="search_engine_menu" title="选择搜索引擎" aria-label="选择搜索引擎"
+aria-haspopup="true" aria-expanded="false" aria-controls="search-engine-menu">
 ⌄
 </button>
 
@@ -265,6 +267,18 @@ class="shortcuts"></div>
 
 </main>
 
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="confirm-dialog" class="modal" hidden>
+<div class="modal-box">
+<p id="confirm-message"></p>
+<div class="form-buttons">
+<button type="button" id="confirm-ok" data-action="confirm-ok" data-i18n="delete">删除</button>
+<button type="button" id="confirm-cancel" data-action="confirm-cancel" data-i18n="cancel">取消</button>
+</div>
+</div>
+</div>
 
 <div id="card-editor">
 

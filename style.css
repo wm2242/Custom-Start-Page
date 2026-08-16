@@ -395,29 +395,6 @@ padding-right:4px;
 display:block;
 }
 
-.editor-item{
-padding:10px 0;
-border-bottom:1px solid var(--border);
-}
-
-.editor-item input{
-margin-bottom:4px;
-}
-
-.sort-number{
-width:60px!important;
-background:var(--card)!important;
-color:var(--text)!important;
-border:1px solid var(--border)!important;
-text-align:center;
-}
-
-.sort-tip{
-font-size:12px;
-color:var(--secondary);
-margin-bottom:8px;
-}
-
 .card-setting{
 display:flex;
 align-items:center;
@@ -712,4 +689,56 @@ margin-left:10px; /* 旧浏览器（不支持 flex gap）用 margin 模拟间距
 
 .form-buttons button{
 flex:1;
+}
+
+/* ---- 提示条 / 确认对话框 ---- */
+.toast{
+position:fixed;
+left:50%;
+bottom:24px;
+transform:translateX(-50%) translateY(16px);
+background:var(--text);
+color:var(--card);
+padding:10px 18px;
+border-radius:8px;
+font-size:14px;
+opacity:0;
+visibility:hidden;
+transition:.25s;
+z-index:999;
+pointer-events:none;
+}
+
+.toast.show{
+opacity:1;
+visibility:visible;
+transform:translateX(-50%) translateY(0);
+}
+
+.modal{
+position:fixed;
+inset:0;
+background:rgba(0,0,0,.35);
+display:flex;
+align-items:center;
+justify-content:center;
+z-index:1000;
+}
+
+.modal[hidden]{
+display:none;
+}
+
+.modal-box{
+background:var(--card);
+color:var(--text);
+border:1px solid var(--border);
+border-radius:12px;
+padding:20px;
+min-width:280px;
+box-shadow:0 10px 30px rgba(0,0,0,.2);
+}
+
+.modal-box p{
+margin:0 0 16px;
 }

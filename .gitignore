@@ -1,2 +1,7 @@
 node_modules/
 .testtmp/
+.DS_Store
+*.log
+coverage/
+.vscode/
+.idea/

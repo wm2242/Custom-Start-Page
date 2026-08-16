@@ -15,7 +15,7 @@
 //   events  —— 事件绑定
 //   boot    —— 启动
 //
-// 全局仅暴露 window.app（供模板内联事件使用），其余均为闭包私有。
+// 不向 window 暴露任何函数：所有动态控件均通过事件委托处理，避免全局命名冲突。
 //
 // 浏览器兼容性：最低支持 2018 年及以后发布的浏览器
 //   Chrome 66+ / Edge 16+ / Firefox 52+ / Safari 11.1+
@@ -39,7 +39,7 @@
   // URL 协议白名单校验，仅放行 http/https，防止 javascript: 等注入；
   // 无协议输入自动补 https:// 前缀（如 example.com → https://example.com）
   function safeUrl(u) {
-    u = (u || "").trim();
+    u = String(u == null ? "" : u).trim();
     if (!u) return "#";
     if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) u = "https://" + u; // 无协议时补全
     try {
@@ -47,6 +47,19 @@
       if (p.protocol === "http:" || p.protocol === "https:") return u;
     } catch (e) {}
     return "#";
+  }
+
+  // 图片 URL 协议白名单：自定义图标只允许 http/https，避免 data:/javascript: 等
+  // 作为 <img src> 引入不可信内容；无协议时按 https:// 补全
+  function safeImageUrl(u) {
+    u = String(u == null ? "" : u).trim();
+    if (!u) return "";
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) u = "https://" + u; // 无协议时补全
+    try {
+      const p = new URL(u);
+      if (p.protocol === "http:" || p.protocol === "https:") return u;
+    } catch (e) {}
+    return "";
   }
 
   // localStorage 封装：统一读写模式 + 容错。
@@ -72,6 +85,38 @@
     }
   };
 
+  // 非阻塞提示条：替代 alert 的原生弹窗，提升体验
+  let toastTimer = null;
+  function toast(msg) {
+    const el = $("toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 2500);
+  }
+
+  // 自定义确认对话框：替代 confirm 的原生弹窗，保持视觉一致
+  let confirmCallback = null;
+  function showConfirm(msg, onOk) {
+    const dialog = $("confirm-dialog");
+    if (!dialog) { if (typeof onOk === "function") onOk(); return; }
+    $("confirm-message").textContent = msg;
+    confirmCallback = onOk;
+    dialog.hidden = false;
+    dialog.classList.add("open");
+    const ok = $("confirm-ok");
+    if (ok) ok.focus();
+  }
+  function hideConfirm() {
+    const dialog = $("confirm-dialog");
+    if (dialog) {
+      dialog.hidden = true;
+      dialog.classList.remove("open");
+    }
+    confirmCallback = null;
+  }
+
   // ============================================================
   // i18n —— 国际化
   // ============================================================
@@ -89,7 +134,7 @@
       color_secondary: "次要文字色", color_border: "边框色", color_reset: "恢复默认",
       card_display: "卡片显示", columns: "每行卡片数量", hide_cards: "隐藏所有卡片",
       data_manage: "数据管理", export_data: "导出数据", import_data: "导入数据",
-      search_placeholder: "搜索网页",
+      search_placeholder: "搜索网页", search_engine_menu: "选择搜索引擎",
       card_name: "名称", card_url: "网址",
       icon_auto: "自动图标", icon_url: "图片地址", icon_emoji: "Emoji", icon_content: "图标内容",
       add_card: "添加卡片", edit_card: "编辑卡片", delete_card: "删除卡片", delete: "删除",
@@ -97,7 +142,7 @@
       confirm_delete: "确定删除此卡片？", at_least_one: "至少保留一个搜索引擎",
       keyword_dup: "关键词重复", engine_url_invalid: "搜索地址无效，需包含查询参数（如 ?q= 或 %s）",
       import_fail: "导入失败", import_too_large: "备份文件过大（超过 {n} MB）",
-      import_version: "备份由更新版本导出，无法导入"
+      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功"
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
@@ -112,7 +157,7 @@
       color_secondary: "Secondary Text", color_border: "Border", color_reset: "Reset",
       card_display: "Card Display", columns: "Cards per Row", hide_cards: "Hide All Cards",
       data_manage: "Data Management", export_data: "Export Data", import_data: "Import Data",
-      search_placeholder: "Search the web",
+      search_placeholder: "Search the web", search_engine_menu: "Search engine",
       card_name: "Name", card_url: "URL",
       icon_auto: "Auto Icon", icon_url: "Image URL", icon_emoji: "Emoji", icon_content: "Icon Content",
       add_card: "Add Card", edit_card: "Edit Card", delete_card: "Delete Card", delete: "Delete",
@@ -120,7 +165,7 @@
       confirm_delete: "Delete this card?", at_least_one: "Keep at least one search engine",
       keyword_dup: "Keyword already exists", engine_url_invalid: "Invalid search URL — must contain a query parameter (e.g. ?q= or %s)",
       import_fail: "Import failed", import_too_large: "Backup file too large (over {n} MB)",
-      import_version: "Backup exported by a newer version — cannot import"
+      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported"
     }
   };
 
@@ -139,12 +184,16 @@
     return (I18N[L] && I18N[L][key]) || I18N.zh[key] || key;
   }
 
-  // 将 data-i18n 标注的静态文本应用翻译（text/title/placeholder）
+  // 将 data-i18n 标注的静态文本应用翻译（text/title/placeholder/aria-label）
   function applyI18n() {
     const L = curLang();
     document.documentElement.lang = L === "zh" ? "zh-CN" : "en";
     document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
-    document.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
+    document.querySelectorAll("[data-i18n-title]").forEach(el => {
+      const text = t(el.dataset.i18nTitle);
+      el.title = text;
+      el.setAttribute("aria-label", text);
+    });
     document.querySelectorAll("[data-i18n-placeholder]").forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
   }
 
@@ -165,6 +214,8 @@
   let config = { sites: [], layout: Object.assign({}, defaultLayout) }; // 站点与布局
   let engines = DEFAULT_ENGINES.slice();               // 搜索引擎列表
   let engineIndex = 0;                                 // 当前引擎索引
+  let engineKeywordIndex = new Map();                  // 小写关键词 → 引擎索引（搜索时 O(1) 定位）
+  let engineKeywords = new Set();                      // 所有小写关键词集合（查重 O(1)）
   let theme = "system";                                // 主题：system/light/dark
   let lang = "system";                                 // 语言：system/zh/en
   let colors = null;                                   // 自定义配色：{bg,card,text,secondary,border} 或 null=用主题默认
@@ -190,16 +241,19 @@
     return ok ? out : null;
   }
 
-  // 站点条目：修正字段类型；URL 非法则整条丢弃
+  // 站点条目：修正字段类型；URL 非字符串/非法则整条丢弃；图标 URL 仅放行 http/https
   function normalizeSite(s) {
-    if (!s || typeof s !== "object") return null;
+    if (!s || typeof s !== "object" || typeof s.url !== "string") return null;
     const url = safeUrl(s.url);
     if (url === "#") return null;
+    const iconType = ICON_TYPES.includes(s.iconType) ? s.iconType : "auto";
+    const icon = typeof s.icon === "string" ? s.icon : "";
+    const finalIconType = iconType === "url" ? (safeImageUrl(icon) ? "url" : "auto") : iconType;
     return {
       name: typeof s.name === "string" ? s.name : "",
       url,
-      iconType: ICON_TYPES.includes(s.iconType) ? s.iconType : "auto",
-      icon: typeof s.icon === "string" ? s.icon : ""
+      iconType: finalIconType,
+      icon
     };
   }
 
@@ -240,17 +294,17 @@
     return out;
   }
 
-  // 搜索引擎列表：仅保留结构合法的条目；整体非法返回 null（沿用默认列表）
+  // 搜索引擎列表：仅保留结构合法且搜索地址可用的条目；整体非法返回 null（沿用默认列表）
   function normalizeEngines(list) {
     if (!Array.isArray(list)) return null;
     const out = [];
     list.forEach(e => {
       if (e && typeof e === "object" &&
           typeof e.name === "string" && e.name.trim() &&
-          typeof e.url === "string") {
+          typeof e.url === "string" && isValidEngineUrl(e.url)) {
         out.push({
           name: e.name,
-          url: e.url,
+          url: safeUrl(e.url),
           keyword: typeof e.keyword === "string" ? e.keyword : ""
         });
       }
@@ -258,22 +312,28 @@
     return out.length ? out : null;
   }
 
-  // 搜索引擎地址是否可用：必须含 %s / {query} 占位符，或已是带查询参数的 URL
-  // （防止拼出 "https://example.com关键字" 这类无效搜索链接，参考建议 3.4）
+  // 搜索引擎地址是否可用：含 %s / {query} 占位符，或带有查询字符串的 URL 均可
+  // （同时防止拼出 "https://example.com关键字" 这类无效搜索链接，参考建议 3.4）
   function isValidEngineUrl(u) {
     const url = safeUrl(u);
     if (url === "#") return false;
-    return url.includes("%s") || url.includes("{query}") || (url.includes("?") && url.includes("="));
+    return url.includes("%s") || url.includes("{query}") || url.includes("?");
   }
 
-  // 构造搜索链接：优先替换 %s / {query} 占位符；否则按“URL 已以查询参数结尾”直接追加
+  // 构造搜索链接：优先替换 %s / {query} 占位符；无占位符时按查询串形式智能追加
   function buildSearchUrl(base, query) {
     const url = safeUrl(base);
     if (url === "#") return "#";
     const q = encodeURIComponent(query);
     if (url.includes("%s")) return url.replace(/%s/g, q);
     if (url.includes("{query}")) return url.replace(/\{query\}/g, q);
-    return url + q;
+    if (url.includes("?")) {
+      // 查询参数在末尾：?q= / ?q / ? 直接追加；否则新增一个 q 参数
+      if (/[?&][^&#?=]*=$/.test(url) || url.endsWith("?") || url.endsWith("&")) return url + q;
+      if (/[?&][^&#?=]*$/.test(url)) return url + "=" + q;
+      return url + "&q=" + q;
+    }
+    return url + "?q=" + q;
   }
 
   // ============================================================
@@ -284,8 +344,23 @@
   const STATE_VERSION = 2;
   const MAX_IMPORT_SIZE = 5 * 1024 * 1024;  // 导入文件大小上限：5MB（防止解析超大文件卡顿）
 
+  // 重建关键词索引：用于搜索时 O(1) 定位引擎、编辑时 O(1) 查重
+  function rebuildEngineIndex() {
+    const index = new Map();
+    const keywords = new Set();
+    engines.forEach((e, i) => {
+      const k = (e.keyword || "").trim().toLowerCase();
+      if (!k) return;
+      if (!index.has(k)) index.set(k, i);
+      keywords.add(k);
+    });
+    engineKeywordIndex = index;
+    engineKeywords = keywords;
+  }
+
   // 把内存状态整体写入单一 key；顺带清理迁移前遗留的旧 key。返回写入的数据对象
   function saveState() {
+    rebuildEngineIndex(); // 保证关键词索引与 engines 始终同步
     const data = {
       version: STATE_VERSION,
       sites: config.sites,
@@ -446,18 +521,18 @@
     const box = $("engine-list");
     box.innerHTML = engines.map((e, i) => `
 <div class="engine-sort-item" draggable="true" data-index="${i}">
-  <div class="engine-title" onclick="app.toggleEngineDetail(${i})">
+  <div class="engine-title" data-action="toggle-engine" data-index="${i}" tabindex="0" role="button" aria-expanded="false">
     <span>${i + 1}. ${escapeHtml(e.name)}</span>
     <span>⌄</span>
   </div>
   <div class="engine-detail" id="engine-detail-${i}">
-    <input value="${escapeHtml(e.name)}" onchange="app.editEngine(${i},'name',this.value)">
-    <input value="${escapeHtml(e.url)}" onchange="app.editEngine(${i},'url',this.value)">
-    <input value="${escapeHtml(e.keyword || "")}" placeholder="${escapeHtml(t('keyword'))}" onchange="app.editEngine(${i},'keyword',this.value)">
-    <button onclick="app.deleteEngine(${i})">${escapeHtml(t('delete'))}</button>
+    <input value="${escapeHtml(e.name)}" data-action="edit-engine" data-index="${i}" data-field="name">
+    <input value="${escapeHtml(e.url)}" data-action="edit-engine" data-index="${i}" data-field="url">
+    <input value="${escapeHtml(e.keyword || "")}" placeholder="${escapeHtml(t('keyword'))}" data-action="edit-engine" data-index="${i}" data-field="keyword">
+    <button data-action="delete-engine" data-index="${i}">${escapeHtml(t('delete'))}</button>
   </div>
 </div>`).join("");
-    // 拖拽排序由 bindEvents 中的事件委托统一处理，这里不再逐项绑定
+    // 拖拽排序与所有动态控件均由 bindEvents 中的事件委托统一处理
   }
 
   // 搜索框旁的引擎快捷切换菜单（当前引擎置顶）
@@ -465,10 +540,16 @@
     const menu = $("search-engine-menu");
     if (!menu) return;
     const idx = getEngineIndex();
-    const list = [engines[idx], ...engines.filter((e, i) => i !== idx)];
-    menu.innerHTML = list.map(e => {
-      const i = engines.indexOf(e);
-      return `<div class="search-engine-item" onclick="app.changeEngine(${i})">${escapeHtml(e.name)}</div>`;
+    const items = [];
+    engines.forEach((e, i) => {
+      if (i === idx) return;
+      items.push([i, e]);
+    });
+    items.unshift([idx, engines[idx]]);
+    menu.innerHTML = items.map(pair => {
+      const i = pair[0];
+      const e = pair[1];
+      return `<div class="search-engine-item" data-action="change-engine" data-index="${i}" role="button" tabindex="0">${escapeHtml(e.name)}</div>`;
     }).join("");
   }
 
@@ -485,7 +566,10 @@
     if (open && !menu.classList.contains("open")) renderSearchEngineMenu(); // 打开前先渲染
     menu.classList.toggle("open", open);
     const btn = $("search-engine-btn");
-    if (btn) btn.textContent = open ? "⌃" : "⌄";
+    if (btn) {
+      btn.textContent = open ? "⌃" : "⌄";
+      btn.setAttribute("aria-expanded", String(open));
+    }
   }
 
   // 刷新全部引擎相关视图（下拉框 + 管理列表 + 快捷菜单）
@@ -504,16 +588,20 @@
     // 编辑模式（详情展开）下禁用该行拖拽，避免 draggable 干扰输入框文字选取
     const item = box.closest("[draggable]");
     if (item) item.draggable = !open;
-    const arrow = box.previousElementSibling.querySelector("span:last-child");
-    arrow.textContent = open ? "⌃" : "⌄";
+    const title = box.previousElementSibling;
+    if (title) {
+      const arrow = title.querySelector("span:last-child");
+      if (arrow) arrow.textContent = open ? "⌃" : "⌄";
+      title.setAttribute("aria-expanded", String(open));
+    }
   }
 
   function toggleEngineDetail(i) { toggleDetail("engine-detail", i); }
 
   // 编辑引擎字段（name/url/keyword）；url 校验搜索地址、keyword 校验重复
   function editEngine(i, key, value) {
-    if (key === "url" && !isValidEngineUrl(value)) { alert(t("engine_url_invalid")); return; }
-    if (key === "keyword" && !keywordUnique(value, i)) { alert(t("keyword_dup")); return; }
+    if (key === "url" && !isValidEngineUrl(value)) { toast(t("engine_url_invalid")); return; }
+    if (key === "keyword" && !keywordUnique(value, i)) { toast(t("keyword_dup")); return; }
     engines[i][key] = value.trim();
     saveState();
     renderEngines();
@@ -521,7 +609,7 @@
 
   // 删除引擎（至少保留一个）
   function deleteEngine(i) {
-    if (engines.length <= 1) { alert(t("at_least_one")); return; }
+    if (engines.length <= 1) { toast(t("at_least_one")); return; }
     engines.splice(i, 1);
     if (getEngineIndex() >= engines.length) engineIndex = 0;
     saveState();
@@ -539,7 +627,12 @@
   function keywordUnique(k, excludeIndex) {
     k = (k || "").trim().toLowerCase();
     if (!k) return true;
-    return !engines.some((e, i) => i !== excludeIndex && (e.keyword || "").trim().toLowerCase() === k);
+    // 编辑时允许保留自身原有关键词
+    if (excludeIndex >= 0 && engines[excludeIndex] &&
+        (engines[excludeIndex].keyword || "").trim().toLowerCase() === k) {
+      return true;
+    }
+    return !engineKeywords.has(k);
   }
 
   // 添加新搜索引擎（表单提交）
@@ -549,8 +642,8 @@
     const keyEl = $("engine-keyword");
     const keyword = keyEl.value.trim().toLowerCase();
     if (!nameEl.value.trim() || !urlEl.value.trim()) return;
-    if (!isValidEngineUrl(urlEl.value)) { alert(t("engine_url_invalid")); return; }
-    if (!keywordUnique(keyword, -1)) { alert(t("keyword_dup")); return; }
+    if (!isValidEngineUrl(urlEl.value)) { toast(t("engine_url_invalid")); return; }
+    if (!keywordUnique(keyword, -1)) { toast(t("keyword_dup")); return; }
     engines.push({ name: nameEl.value.trim(), url: urlEl.value.trim(), keyword });
     saveState();
     renderEngines();
@@ -573,8 +666,12 @@
   // 按图标类型生成图标 HTML（网格卡片与编辑器共用）
   function siteIcon(site, host) {
     if (site.iconType === "emoji") return `<span>${escapeHtml(site.icon || "🌐")}</span>`;
-    if (site.iconType === "url") return `<img src="${escapeHtml(site.icon)}">`;
-    return `<img src="https://${escapeHtml(host)}/favicon.ico" onerror="app.faviconFallback(this,'${escapeHtml(host)}')">`;
+    if (site.iconType === "url") {
+      const icon = safeImageUrl(site.icon);
+      if (icon) return `<img src="${escapeHtml(icon)}">`;
+      return `<span>${escapeHtml(site.icon || "🌐")}</span>`; // 非法/空图片 URL 回退文字占位
+    }
+    return `<img src="https://${escapeHtml(host)}/favicon.ico" data-favicon-host="${escapeHtml(host)}">`;
   }
 
   // 图标类型下拉选项（编辑器复用）
@@ -586,6 +683,60 @@
     ].map(([v, key]) =>
       `<option value="${v}" ${current === v ? "selected" : ""}>${escapeHtml(t(key))}</option>`
     ).join("");
+  }
+
+  // 创建单张卡片 DOM（供全量渲染与增量添加共用）
+  function createShortcut(site, i) {
+    let host;
+    try { host = new URL(site.url).hostname; } catch (e) { return null; }
+    const link = document.createElement("a");
+    link.className = "shortcut";
+    link.href = safeUrl(site.url);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.draggable = true;
+    link.dataset.index = i;
+    link.innerHTML = `
+<div class="shortcut-icon">${siteIcon(site, host)}</div>
+<div class="shortcut-title">${escapeHtml(site.name)}</div>`;
+    return link;
+  }
+
+  // 设置面板中的单条卡片管理项 HTML
+  function renderEditorItem(site, i) {
+    return `
+<div class="card-sort-item" draggable="true" data-index="${i}">
+  <div class="card-title" data-action="toggle-card" data-index="${i}" tabindex="0" role="button" aria-expanded="false">
+    <span>${i + 1}. ${escapeHtml(site.name)}</span>
+    <span>⌄</span>
+  </div>
+  <div class="card-detail" id="card-detail-${i}">
+    <input value="${escapeHtml(site.name || "")}" data-action="edit-card" data-index="${i}" data-field="name">
+    <input value="${escapeHtml(site.url || "")}" data-action="edit-card" data-index="${i}" data-field="url">
+    <select data-action="edit-card" data-index="${i}" data-field="iconType">${iconTypeOptions(site.iconType || "auto")}</select>
+    <input value="${escapeHtml(site.icon || "")}" data-action="edit-card" data-index="${i}" data-field="icon">
+    <button data-action="remove-card" data-index="${i}">${escapeHtml(t('delete'))}</button>
+  </div>
+</div>`;
+  }
+
+  // 重新校正网格与设置面板中卡片节点的 data-index / id / 序号
+  function reindexSiteViews() {
+    document.querySelectorAll("#sites a.shortcut").forEach((el, idx) => { el.dataset.index = idx; });
+    document.querySelectorAll("#editor .card-sort-item").forEach((el, idx) => {
+      const site = config.sites[idx];
+      if (!site) return;
+      el.dataset.index = idx;
+      const title = el.querySelector(".card-title");
+      if (title) {
+        title.dataset.index = idx;
+        const num = title.querySelector("span:first-child");
+        if (num) num.textContent = `${idx + 1}. ${site.name}`;
+      }
+      const detail = el.querySelector(".card-detail");
+      if (detail) detail.id = "card-detail-" + idx;
+      el.querySelectorAll("[data-index]").forEach(ctl => { ctl.dataset.index = idx; });
+    });
   }
 
   // 渲染主页面：卡片网格 + 添加卡片 + 设置面板编辑器
@@ -600,35 +751,15 @@
     if (hidden) return;
 
     config.sites.forEach((site, i) => {
-      let host;
-      try { host = new URL(site.url).hostname; } catch (e) { return; } // 跳过非法 URL
-      const link = document.createElement("a");
-      link.className = "shortcut";
-      link.href = safeUrl(site.url);
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.draggable = true;
-      link.dataset.index = i;
-      link.innerHTML = `
-<div class="shortcut-icon">${siteIcon(site, host)}</div>
-<div class="shortcut-title">${escapeHtml(site.name)}</div>`;
-      box.appendChild(link);
-      // 拖拽排序与右键菜单由 bindEvents 中的事件委托统一处理，这里不再逐项绑定
+      const link = createShortcut(site, i);
+      if (link) box.appendChild(link);
     });
 
     // 末尾的"添加卡片"占位卡片
     const addCard = document.createElement("div");
     addCard.className = "shortcut add-card";
+    addCard.dataset.action = "add-card";
     addCard.innerHTML = `<div class="shortcut-icon add-icon">+</div><div class="shortcut-title">${escapeHtml(t('add_card'))}</div>`;
-    addCard.onclick = e => {
-      e.stopPropagation(); // 阻止冒泡到全局监听，避免刚打开的编辑器被立即关闭
-      editIndex = -1;
-      $("card-name").value = "";
-      $("card-url").value = "";
-      $("card-icon-type").value = "auto";
-      $("card-icon").value = "";
-      $("card-editor").classList.add("open");
-    };
     box.appendChild(addCard);
   }
 
@@ -636,21 +767,31 @@
   function renderEditor() {
     const box = $("editor");
     if (!box || !Array.isArray(config.sites)) return;  // 防御：数据未就绪时安全返回
-    box.innerHTML = config.sites.map((site, i) => `
-<div class="card-sort-item" draggable="true" data-index="${i}">
-  <div class="card-title" onclick="app.toggleCardDetail(${i})">
-    <span>${i + 1}. ${escapeHtml(site.name)}</span>
-    <span>⌄</span>
-  </div>
-  <div class="card-detail" id="card-detail-${i}">
-    <input value="${escapeHtml(site.name || "")}" onchange="app.editCardValue(${i},'name',this.value)">
-    <input value="${escapeHtml(site.url || "")}" onchange="app.editCardValue(${i},'url',this.value)">
-    <select onchange="app.editCardValue(${i},'iconType',this.value)">${iconTypeOptions(site.iconType || "auto")}</select>
-    <input value="${escapeHtml(site.icon || "")}" onchange="app.editCardValue(${i},'icon',this.value)">
-    <button onclick="app.removeCard(${i})">${escapeHtml(t('delete'))}</button>
-  </div>
-</div>`).join("");
-    // 拖拽排序由 bindEvents 中的事件委托统一处理
+    box.innerHTML = config.sites.map((site, i) => renderEditorItem(site, i)).join("");
+  }
+
+  // 增量新增卡片视图：仅在网格末尾追加，不整页重建 DOM
+  function appendSiteView(index) {
+    const site = config.sites[index];
+    if (!site) return;
+    const grid = $("sites");
+    if (grid && grid.style.display !== "none") {
+      const link = createShortcut(site, index);
+      if (link) grid.insertBefore(link, grid.querySelector(".add-card"));
+    }
+    if ($("panel").style.display === "block") {
+      const editor = $("editor");
+      if (editor) editor.insertAdjacentHTML("beforeend", renderEditorItem(site, index));
+    }
+  }
+
+  // 增量删除卡片视图：仅移除对应 DOM 并重排后续索引
+  function removeSiteView(index) {
+    const cardEl = document.querySelector(`#sites a.shortcut[data-index="${index}"]`);
+    if (cardEl) cardEl.remove();
+    const itemEl = document.querySelector(`#editor .card-sort-item[data-index="${index}"]`);
+    if (itemEl) itemEl.remove();
+    reindexSiteViews();
   }
 
   // 只更新第 i 张卡片对应的 DOM（网格卡片 + 设置面板列表项），避免整页重绘（参考建议 4.1）
@@ -685,19 +826,21 @@
 
   // 右键弹出卡片操作菜单
   function showCardMenu(index, x, y) {
-    const old = $("card-menu");
-    if (old) old.remove();
+    removeCardMenu();
     const menu = document.createElement("div");
     menu.id = "card-menu";
     menu.innerHTML = `
-<div onclick="app.editCard(${index})">${escapeHtml(t('edit_card'))}</div>
-<div onclick="app.removeCard(${index})">${escapeHtml(t('delete_card'))}</div>
-<div onclick="this.parentNode.remove()">${escapeHtml(t('cancel'))}</div>`;
+<div data-action="edit-card-menu" data-index="${index}">${escapeHtml(t('edit_card'))}</div>
+<div data-action="delete-card-menu" data-index="${index}">${escapeHtml(t('delete_card'))}</div>
+<div data-action="cancel-card-menu">${escapeHtml(t('cancel'))}</div>`;
     menu.style.left = x + "px";
     menu.style.top = y + "px";
     document.body.appendChild(menu);
-    // 点击任一菜单项后移除菜单
-    menu.onclick = () => menu.remove();
+  }
+
+  function removeCardMenu() {
+    const menu = $("card-menu");
+    if (menu) menu.remove();
   }
 
   // 打开卡片编辑器（填充现有数据）
@@ -711,13 +854,13 @@
     $("card-editor").classList.add("open");
   }
 
-  // 删除卡片（带确认）
+  // 删除卡片（带自定义确认对话框）
   function removeCard(i) {
-    if (confirm(t("confirm_delete"))) {
+    showConfirm(t("confirm_delete"), () => {
       config.sites.splice(i, 1);
       saveState();
-      renderSites();
-    }
+      if (config.layout.hide) renderSites(); else removeSiteView(i);
+    });
   }
 
   // 保存卡片（新增或更新）
@@ -727,11 +870,14 @@
     const typeEl = $("card-icon-type");
     const iconEl = $("card-icon");
     if (!urlEl.value.trim()) return;
+    const rawIcon = iconEl.value.trim();
+    const isUrlType = typeEl.value === "url";
+    const iconType = isUrlType && safeImageUrl(rawIcon) ? "url" : isUrlType ? "auto" : typeEl.value;
     const data = {
       name: nameEl.value.trim() || urlEl.value,
       url: safeUrl(urlEl.value.trim()),
-      iconType: typeEl.value,
-      icon: iconEl.value.trim()
+      iconType,
+      icon: rawIcon
     };
     if (data.url === "#") return; // 非法 URL 拒绝保存
     if (editIndex >= 0) {
@@ -740,10 +886,11 @@
       saveState();
       syncSiteViews(editIndex);
     } else {
-      // 新增卡片
+      // 新增卡片：仅在网格末尾增量追加，避免整页重绘
+      const newIndex = config.sites.length;
       config.sites.push(data);
       saveState();
-      renderSites();
+      if (config.layout.hide) renderSites(); else appendSiteView(newIndex);
     }
     closeCardEditor();
   }
@@ -763,6 +910,12 @@
       value = safeUrl(value);
       if (value === "#") return;
     }
+    if (key === "iconType" && value === "url" && !safeImageUrl(config.sites[i].icon || "")) {
+      value = "auto"; // 图片地址非法时不允许切到 url 图标，避免保存不可信/不可用图标
+    }
+    if (key === "icon" && config.sites[i].iconType === "url" && !safeImageUrl(value)) {
+      config.sites[i].iconType = "auto";
+    }
     config.sites[i][key] = value;
     saveState();
     syncSiteViews(i);
@@ -778,9 +931,10 @@
       url: safeUrl(urlEl.value.trim())
     };
     if (data.url === "#") return; // 非法 URL 拒绝保存
+    const newIndex = config.sites.length;
     config.sites.push(data);
     saveState();
-    renderSites();
+    if (config.layout.hide) renderSites(); else appendSiteView(newIndex);
     nameEl.value = "";
     urlEl.value = "";
     $("site-form").classList.remove("show");
@@ -802,16 +956,22 @@
   function exportData() {
     const blob = new Blob([JSON.stringify(saveState(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    a.href = url;
     a.download = "homepage-backup-" + timestamp() + ".json";
     a.click();
+    // 释放临时 Blob URL，避免长期占用内存
+    if (URL.revokeObjectURL) {
+      const revoke = URL.revokeObjectURL.bind(URL);
+      setTimeout(() => revoke(url), 0);
+    }
   }
 
   // 从 JSON 文件导入配置（渲染时已有 esc/safeUrl 防护；结构经 normalize 校验）
   // 导入前先做两道防线：文件大小上限 + 备份版本号校验
   function importData(file) {
     if (file.size > MAX_IMPORT_SIZE) {
-      alert(t("import_too_large").replace("{n}", String(MAX_IMPORT_SIZE / 1024 / 1024)));
+      toast(t("import_too_large").replace("{n}", String(MAX_IMPORT_SIZE / 1024 / 1024)));
       return;
     }
     const reader = new FileReader();
@@ -821,7 +981,7 @@
         // 版本校验：更高版本导出的备份结构未知，拒绝导入（缺失/旧版本则照常归一化）
         const v = data && data.version;
         if (typeof v === "number" && v > STATE_VERSION) {
-          alert(t("import_version"));
+          toast(t("import_version"));
           return;
         }
         applyState(normalizeState(data));  // 站点/布局/引擎/索引/主题/语言/配色整体归一化导入
@@ -833,7 +993,8 @@
         syncColorPanel();
         renderEngines();
         renderSites();
-      } catch (e) { alert(t("import_fail")); }
+        toast(t("import_ok"));
+      } catch (e) { toast(t("import_fail")); }
     };
     reader.readAsText(file);
   }
@@ -857,27 +1018,105 @@
   function closeAllPopups() {
     const panel = $("panel");
     if (panel) panel.style.display = "none";
+    const settings = $("settings");
+    if (settings) settings.setAttribute("aria-expanded", "false");
     setSearchMenuOpen(false); // 关闭引擎菜单并复位按钮箭头
     const cardEditor = $("card-editor");
     if (cardEditor) cardEditor.classList.remove("open");
-    const cardMenu = $("card-menu");
-    if (cardMenu) cardMenu.remove();
+    removeCardMenu();
+    hideConfirm();
+  }
+
+  function navigate(url) {
+    // 先派发一个自定义事件，便于测试/统计在不跳转的情况下捕获目标 URL
+    try { document.dispatchEvent(new CustomEvent("startpage:navigate", { detail: { url } })); } catch (e) {}
+    try { location.href = url; } catch (e) { /* 个别测试环境（如 jsdom）未实现导航跳转 */ }
+  }
+
+  // 折叠/展开静态面板（设置面板中的折叠标题）
+  function toggleCollapse(targetId) {
+    const box = $(targetId);
+    const title = document.querySelector(`[data-target="${targetId}"]`);
+    if (!box) return;
+    const open = !box.classList.contains("open");
+    box.classList.toggle("open", open);
+    if (title) {
+      const arrow = title.querySelector("span:last-of-type");
+      if (arrow) arrow.textContent = open ? "⌃" : "⌄";
+      title.setAttribute("aria-expanded", String(open));
+    }
+  }
+
+  // 打开新增卡片编辑器
+  function openAddCard() {
+    editIndex = -1;
+    $("card-name").value = "";
+    $("card-url").value = "";
+    $("card-icon-type").value = "auto";
+    $("card-icon").value = "";
+    $("card-editor").classList.add("open");
   }
 
   function bindEvents() {
-    // 点击窗口外部关闭：点击在任一窗口或触发按钮内则保持打开，否则全部关闭
+    // ---- 动态控件事件委托：所有 data-action 统一处理，无需全局函数 -------
     document.addEventListener("click", e => {
       const t = e.target;
+      const actionEl = t.closest("[data-action]");
+      if (actionEl) {
+        const action = actionEl.dataset.action;
+        const index = Number(actionEl.dataset.index);
+        switch (action) {
+          case "toggle-engine": toggleEngineDetail(index); return;
+          case "delete-engine": deleteEngine(index); return;
+          case "change-engine": changeEngine(index); return;
+          case "toggle-card": toggleCardDetail(index); return;
+          case "remove-card": removeCard(index); return;
+          case "edit-card-menu": editCard(index); removeCardMenu(); return;
+          case "delete-card-menu": removeCard(index); removeCardMenu(); return;
+          case "cancel-card-menu": removeCardMenu(); return;
+          case "add-card": openAddCard(); return;
+          case "collapse": toggleCollapse(actionEl.dataset.target); return;
+          case "confirm-ok": {
+            if (typeof confirmCallback === "function") {
+              const cb = confirmCallback;
+              hideConfirm();
+              cb();
+            }
+            return;
+          }
+          case "confirm-cancel": hideConfirm(); return;
+        }
+      }
+
+      // 点击窗口外部关闭：点击在任一窗口或触发按钮内则保持打开，否则全部关闭
       if (t.closest("#panel") || t.closest("#settings") ||
           t.closest("#search-engine-menu") || t.closest("#search-engine-btn") ||
-          t.closest("#card-editor")) return;
-      // 点击右键菜单内部：只移除菜单，不影响菜单项已触发的操作（如打开编辑器）
-      if (t.closest("#card-menu")) {
-        const m = $("card-menu");
-        if (m) m.remove();
-        return;
-      }
+          t.closest("#card-editor") || t.closest("#confirm-dialog")) return;
+      // 点击右键菜单内部：只移除菜单
+      if (t.closest("#card-menu")) { removeCardMenu(); return; }
       closeAllPopups();
+    });
+
+    // 动态表单字段变更：内联编辑引擎 / 卡片
+    document.addEventListener("change", e => {
+      const el = e.target;
+      if (!el || !el.matches) return;
+      if (el.matches("[data-action='edit-engine']")) {
+        editEngine(Number(el.dataset.index), el.dataset.field, el.value);
+      } else if (el.matches("[data-action='edit-card']")) {
+        editCardValue(Number(el.dataset.index), el.dataset.field, el.value);
+      }
+    });
+
+    // 键盘可达性：Enter/Space 触发可聚焦的动态操作项；Escape 关闭原生下拉并复位箭头
+    document.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        const trigger = e.target.closest("[data-action]");
+        if (trigger && ["toggle-engine", "toggle-card", "collapse", "change-engine"].includes(trigger.dataset.action)) {
+          e.preventDefault();
+          trigger.click();
+        }
+      }
     });
 
     // 拖拽排序 + 卡片右键菜单：事件委托，只绑定一次（列表重建无需重新绑定）
@@ -898,6 +1137,7 @@
       const panel = $("panel");
       const opening = panel.style.display !== "block";
       panel.style.display = opening ? "block" : "none";
+      $("settings").setAttribute("aria-expanded", String(opening));
       if (opening) {
         $("theme-mode").value = theme;
         $("lang-mode").value = lang;
@@ -912,16 +1152,6 @@
       }
     };
 
-    // 折叠面板（箭头 ⌄/⌃ 切换）
-    document.querySelectorAll(".collapse-title").forEach(title => {
-      title.onclick = () => {
-        const box = $(title.dataset.target);
-        box.classList.toggle("open");
-        const arrow = title.querySelector("span:last-of-type");
-        if (arrow) arrow.textContent = box.classList.contains("open") ? "⌃" : "⌄";
-      };
-    });
-
     // 添加搜索引擎表单
     $("save-engine").onclick = addEngine;
     $("show-engine-form").onclick = () => $("engine-form").classList.toggle("show");
@@ -934,12 +1164,16 @@
     // focusin/mousedown = 展开（箭头朝上）；change（选中）/focusout（失焦）/Escape = 关闭（箭头朝下）
     const ARROW_SELECT = "#panel select, #card-editor select";
     const isArrowSelect = e => !!(e.target && e.target.matches && e.target.matches(ARROW_SELECT));
-    document.addEventListener("focusin", e => { if (isArrowSelect(e)) e.target.classList.add("open"); });
-    document.addEventListener("mousedown", e => { if (isArrowSelect(e)) e.target.classList.add("open"); });
-    document.addEventListener("change", e => { if (isArrowSelect(e)) e.target.classList.remove("open"); });
-    document.addEventListener("focusout", e => { if (isArrowSelect(e)) e.target.classList.remove("open"); });
+    const setArrowOpen = (el, open) => {
+      el.classList.toggle("open", open);
+      el.setAttribute("aria-expanded", String(open));
+    };
+    document.addEventListener("focusin", e => { if (isArrowSelect(e)) setArrowOpen(e.target, true); });
+    document.addEventListener("mousedown", e => { if (isArrowSelect(e)) setArrowOpen(e.target, true); });
+    document.addEventListener("change", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
+    document.addEventListener("focusout", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
     document.addEventListener("keydown", e => {
-      if (e.key === "Escape" && isArrowSelect(e)) e.target.classList.remove("open");
+      if (e.key === "Escape" && isArrowSelect(e)) setArrowOpen(e.target, false);
     });
 
     // 搜索引擎下拉切换（菜单未打开时无需重绘）
@@ -970,7 +1204,10 @@
     // 数据导入导出
     $("export-data").onclick = exportData;
     $("import-data").addEventListener("change", function () {
-      if (this.files[0]) importData(this.files[0]);
+      if (this.files[0]) {
+        importData(this.files[0]);
+        this.value = ""; // 允许连续导入同一个文件
+      }
     });
 
     // 布局设置
@@ -1050,25 +1287,32 @@
       const parts = query.split(/\s+/);
       const first = parts[0].toLowerCase();
 
-      // 快捷关键词：`g xxx` → Google 搜索 xxx
-      const engine = engines.find(eng => (eng.keyword || "").toLowerCase() === first);
-      if (engine) {
+      // 快捷关键词：`g xxx` → Google 搜索 xxx（用 Map 索引 O(1) 定位）
+      const keywordEngineIndex = engineKeywordIndex.get(first);
+      if (keywordEngineIndex !== undefined) {
         query = parts.slice(1).join(" ");
-        if (query) location.href = buildSearchUrl(engine.url, query);
+        if (query) navigate(buildSearchUrl(engines[keywordEngineIndex].url, query));
         return;
       }
 
       // `!xxx` → 强制用当前引擎
       if (query.startsWith("!")) {
         query = query.slice(1).trim();
-        location.href = buildSearchUrl(currentSearch(), query);
+        navigate(buildSearchUrl(currentSearch(), query));
         return;
       }
 
-      location.href = buildSearchUrl(currentSearch(), query);
+      navigate(buildSearchUrl(currentSearch(), query));
     });
-  }
 
+    // 捕获阶段监听图片加载失败：favicon 三级回退无需内联 onerror
+    document.addEventListener("error", e => {
+      const img = e.target;
+      if (img && img.matches && img.matches("img[data-favicon-host]")) {
+        faviconFallback(img, img.dataset.faviconHost);
+      }
+    }, true);
+  }
   // ============================================================
   // boot —— 启动
   // ============================================================
@@ -1082,6 +1326,7 @@
   }
 
   async function load() {
+    rebuildEngineIndex(); // 先用默认引擎建立索引，避免 fetch 完成前关键词搜索失效
     bindEvents();
     // 统一读取：单 key 优先，旧散落 key 自动迁移；损坏 → config.json → 空配置
     applyState(normalizeState(loadState() || await fetchConfig()));
@@ -1094,20 +1339,6 @@
     renderSites();
   }
 
-  // ============================================================
-  // 对外暴露（仅限模板内联事件使用，其余全部闭包私有）
-  // ============================================================
-  window.app = {
-    faviconFallback,
-    toggleEngineDetail,
-    editEngine,
-    deleteEngine,
-    changeEngine,
-    editCard,
-    removeCard,
-    editCardValue,
-    toggleCardDetail
-  };
-
+  // 不向 window 暴露任何函数：所有动态控件均通过事件委托处理，避免全局命名冲突
   load();
 })();
