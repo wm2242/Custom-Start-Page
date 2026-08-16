@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>自定义起始页</title>
+<title data-i18n-title="title">自定义起始页</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<button id="settings" class="settings-btn" title="设置">
+<button id="settings" class="settings-btn" data-i18n-title="settings" title="设置">
 <svg viewBox="0 0 24 24">
 <path d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.4 7.4 0 0 0-1.69-.98L14.5 2.42a.5.5 0 0 0-.5-.42h-4a.5.5 0 0 0-.5.42L9.12 5.1a7.4 7.4 0 0 0-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.04.32-.07.65-.07.98s.02.66.07.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.68c.05.24.25.42.5.42h4c.25 0 .45-.18.5-.42l.38-2.68c.61-.25 1.17-.58 1.69-.98l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z"/>
 </svg>
@@ -17,45 +17,56 @@
 
 <div id="panel">
 
-<h3>搜索设置</h3>
+<h3 data-i18n="search_settings">搜索设置</h3>
 <select id="engine"></select>
 
 
+<h3 data-i18n="language">语言 / Language</h3>
+<select id="lang-mode">
+<option value="system">跟随系统 / System</option>
+<option value="zh">中文</option>
+<option value="en">English</option>
+</select>
+
+
 <h3 class="collapse-title" data-target="engine-list">
-搜索引擎管理 <span>⌄</span>
+<span data-i18n="engine_manage">搜索引擎管理</span> <span>⌄</span>
 </h3>
 
 <div id="engine-list" class="collapse-box"></div>
 
 
-<h3>添加搜索引擎</h3>
+<h3 data-i18n="add_engine">添加搜索引擎</h3>
 
 <button id="show-engine-form">
-＋ 添加搜索引擎
+＋ <span data-i18n="add_engine">添加搜索引擎</span>
 </button>
 
 
 <div id="engine-form" class="add-form">
 
 <input id="engine-name"
+data-i18n-placeholder="engine_name"
 placeholder="搜索引擎名称">
 
 <input id="engine-url"
+data-i18n-placeholder="engine_url"
 placeholder="搜索地址">
 
 
 <input id="engine-keyword"
+data-i18n-placeholder="engine_keyword"
 placeholder="快捷关键词">
 
 
 <div class="form-buttons">
 
 <button id="save-engine">
-保存
+<span data-i18n="save">保存</span>
 </button>
 
 <button id="cancel-engine">
-取消
+<span data-i18n="cancel">取消</span>
 </button>
 
 </div>
@@ -64,36 +75,38 @@ placeholder="快捷关键词">
 
 
 <h3 class="collapse-title" data-target="editor">
-导航卡片管理 <span>⌄</span>
+<span data-i18n="card_manage">导航卡片管理</span> <span>⌄</span>
 </h3>
 
 <div id="editor" class="collapse-box"></div>
 
 
 <button id="show-site-form">
-＋ 添加网站
+＋ <span data-i18n="add_site">添加网站</span>
 </button>
 
 
 <div id="site-form" class="add-form">
 
 <input id="site-name"
+data-i18n-placeholder="site_name"
 placeholder="网站名称">
 
 
 <input id="site-url"
+data-i18n-placeholder="site_url"
 placeholder="网站地址">
 
 
 <div class="form-buttons">
 
 <button id="save-site">
-保存
+<span data-i18n="save">保存</span>
 </button>
 
 
 <button id="cancel-site">
-取消
+<span data-i18n="cancel">取消</span>
 </button>
 
 </div>
@@ -101,19 +114,19 @@ placeholder="网站地址">
 </div>
 
 
-<h3>主题设置</h3>
+<h3 data-i18n="theme_settings">主题设置</h3>
 
 <select id="theme-mode">
-<option value="system">system</option>
-<option value="light">light</option>
-<option value="dark">dark</option>
+<option value="system" data-i18n="theme_system">跟随系统</option>
+<option value="light" data-i18n="theme_light">浅色</option>
+<option value="dark" data-i18n="theme_dark">深色</option>
 </select>
 
 
-<h3>卡片显示</h3>
+<h3 data-i18n="card_display">卡片显示</h3>
 
 <div class="card-setting">
-<label>
+<label data-i18n="columns">
 每行卡片数量
 </label>
 
@@ -127,7 +140,7 @@ max="10">
 <div class="card-setting hide-setting">
 
 <label for="hide-cards">
-<span>隐藏所有卡片</span>
+<span data-i18n="hide_cards">隐藏所有卡片</span>
 
 <div class="switch">
 <input id="hide-cards" type="checkbox">
@@ -139,16 +152,16 @@ max="10">
 </div>
 
 
-<h3>数据管理</h3>
+<h3 data-i18n="data_manage">数据管理</h3>
 
 <button id="export-data">
-导出数据
+<span data-i18n="export_data">导出数据</span>
 </button>
 
 
 <label class="import-label">
 
-导入数据
+<span data-i18n="import_data">导入数据</span>
 
 <input id="import-data"
 type="file"
@@ -162,7 +175,7 @@ accept=".json">
 
 <main class="container">
 
-<div class="logo">
+<div class="logo" data-i18n="title">
 自定义起始页
 </div>
 
@@ -173,6 +186,7 @@ class="search-wrapper">
 
 <input id="query"
 class="search-box"
+data-i18n-placeholder="search_placeholder"
 placeholder="搜索网页"
 autofocus>
 
@@ -206,24 +220,26 @@ class="shortcuts"></div>
 
 
 <input id="card-name"
+data-i18n-placeholder="card_name"
 placeholder="名称">
 
 
 <input id="card-url"
+data-i18n-placeholder="card_url"
 placeholder="网址">
 
 
 <select id="card-icon-type">
 
-<option value="auto">
+<option value="auto" data-i18n="icon_auto">
 自动图标
 </option>
 
-<option value="url">
+<option value="url" data-i18n="icon_url">
 图片地址
 </option>
 
-<option value="emoji">
+<option value="emoji" data-i18n="icon_emoji">
 Emoji
 </option>
 
@@ -231,16 +247,17 @@ Emoji
 
 
 <input id="card-icon"
+data-i18n-placeholder="icon_content"
 placeholder="图标内容">
 
 
 <button id="save-card">
-保存
+<span data-i18n="save">保存</span>
 </button>
 
 
 <button id="cancel-card">
-取消
+<span data-i18n="cancel">取消</span>
 </button>
 
 
