@@ -238,6 +238,7 @@ function changeEngine(i) {
   save();
   document.getElementById("engine").value = i;
   renderSearchEngineMenu();
+  document.getElementById("search-engine-menu").classList.remove("open"); // 选择后关闭菜单
 }
 
 // 检查快捷关键词是否重复（排除当前编辑项）
@@ -337,7 +338,8 @@ function render() {
   const addCard = document.createElement("div");
   addCard.className = "shortcut add-card";
   addCard.innerHTML = `<div class="shortcut-icon add-icon">+</div><div class="shortcut-title">${escapeHtml(t('add_card'))}</div>`;
-  addCard.onclick = () => {
+  addCard.onclick = e => {
+    e.stopPropagation(); // 阻止冒泡到全局监听，避免刚打开的编辑器被立即关闭
     editIndex = -1;
     document.getElementById("card-name").value = "";
     document.getElementById("card-url").value = "";
@@ -362,6 +364,8 @@ function showCardMenu(index, x, y) {
   menu.style.left = x + "px";
   menu.style.top = y + "px";
   document.body.appendChild(menu);
+  // 点击任一菜单项后移除菜单
+  menu.onclick = () => menu.remove();
 }
 
 // 打开卡片编辑器（填充现有数据）
@@ -521,6 +525,33 @@ function updateLayout() {
 }
 
 // ---------- 事件绑定 ----------
+// 关闭所有弹出窗口（面板/引擎菜单/卡片编辑器/右键菜单）
+function closeAllPopups() {
+  const panel = document.getElementById("panel");
+  if (panel) panel.style.display = "none";
+  const engineMenu = document.getElementById("search-engine-menu");
+  if (engineMenu) engineMenu.classList.remove("open");
+  const cardEditor = document.getElementById("card-editor");
+  if (cardEditor) cardEditor.classList.remove("open");
+  const cardMenu = document.getElementById("card-menu");
+  if (cardMenu) cardMenu.remove();
+}
+
+// 点击窗口外部关闭：点击在任一窗口或触发按钮内则保持打开，否则全部关闭
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.closest("#panel") || t.closest("#settings") ||
+      t.closest("#search-engine-menu") || t.closest("#search-engine-btn") ||
+      t.closest("#card-editor")) return;
+  // 点击右键菜单内部：只移除菜单，不影响菜单项已触发的操作（如打开编辑器）
+  if (t.closest("#card-menu")) {
+    const m = document.getElementById("card-menu");
+    if (m) m.remove();
+    return;
+  }
+  closeAllPopups();
+});
+
 // 设置面板开关 + 同步各控件当前值
 document.getElementById("settings").onclick = () => {
   const panel = document.getElementById("panel");
