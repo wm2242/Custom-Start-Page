@@ -37,8 +37,6 @@
 <div id="engine-list" class="collapse-box"></div>
 
 
-<h3 data-i18n="add_engine">添加搜索引擎</h3>
-
 <button id="show-engine-form">
 ＋ <span data-i18n="add_engine">添加搜索引擎</span>
 </button>
@@ -122,6 +120,61 @@ placeholder="网站地址">
 <option value="light" data-i18n="theme_light">浅色</option>
 <option value="dark" data-i18n="theme_dark">深色</option>
 </select>
+
+
+<button id="show-color-form">
+＋ <span data-i18n="theme_colors">自定义配色</span>
+</button>
+
+
+<div id="color-form" class="add-form">
+
+<div class="color-settings">
+
+<label>
+<span data-i18n="color_bg">背景色</span>
+<input type="color" id="color-bg" value="#f9f9fb">
+</label>
+
+<label>
+<span data-i18n="color_card">卡片色</span>
+<input type="color" id="color-card" value="#ffffff">
+</label>
+
+<label>
+<span data-i18n="color_text">文字色</span>
+<input type="color" id="color-text" value="#15141a">
+</label>
+
+<label>
+<span data-i18n="color_secondary">次要文字色</span>
+<input type="color" id="color-secondary" value="#5b5b66">
+</label>
+
+<label>
+<span data-i18n="color_border">边框色</span>
+<input type="color" id="color-border" value="#e0e0e6">
+</label>
+
+</div>
+
+<div class="form-buttons">
+
+<button id="color-save" type="button">
+<span data-i18n="save">保存</span>
+</button>
+
+<button id="color-cancel" type="button">
+<span data-i18n="cancel">取消</span>
+</button>
+
+<button id="color-reset" type="button">
+<span data-i18n="color_reset">恢复默认</span>
+</button>
+
+</div>
+
+</div>
 
 
 <h3 data-i18n="card_display">卡片显示</h3>

@@ -85,6 +85,8 @@
       card_manage: "导航卡片管理", add_site: "添加网站",
       site_name: "网站名称", site_url: "网站地址",
       theme_settings: "主题设置", theme_system: "跟随系统", theme_light: "浅色", theme_dark: "深色",
+      theme_colors: "自定义配色", color_bg: "背景色", color_card: "卡片色", color_text: "文字色",
+      color_secondary: "次要文字色", color_border: "边框色", color_reset: "恢复默认",
       card_display: "卡片显示", columns: "每行卡片数量", hide_cards: "隐藏所有卡片",
       data_manage: "数据管理", export_data: "导出数据", import_data: "导入数据",
       search_placeholder: "搜索网页",
@@ -106,6 +108,8 @@
       card_manage: "Shortcut Management", add_site: "Add Site",
       site_name: "Site Name", site_url: "Site URL",
       theme_settings: "Theme Settings", theme_system: "System", theme_light: "Light", theme_dark: "Dark",
+      theme_colors: "Custom Colors", color_bg: "Background", color_card: "Card", color_text: "Text",
+      color_secondary: "Secondary Text", color_border: "Border", color_reset: "Reset",
       card_display: "Card Display", columns: "Cards per Row", hide_cards: "Hide All Cards",
       data_manage: "Data Management", export_data: "Export Data", import_data: "Import Data",
       search_placeholder: "Search the web",
@@ -163,6 +167,7 @@
   let engineIndex = 0;                                 // 当前引擎索引
   let theme = "system";                                // 主题：system/light/dark
   let lang = "system";                                 // 语言：system/zh/en
+  let colors = null;                                   // 自定义配色：{bg,card,text,secondary,border} 或 null=用主题默认
   let editIndex = -1;                                  // 正在编辑的卡片索引（-1 = 新增模式）
 
   // ============================================================
@@ -171,6 +176,19 @@
   // 逐字段校验类型、修正为合法值、缺失项补默认值，保证渲染永不因数据结构出错。
   // ============================================================
   const ICON_TYPES = ["auto", "url", "emoji"];
+  const COLOR_KEYS = ["bg", "card", "text", "secondary", "border"]; // 可自定义配色的 CSS 变量键
+
+  // 自定义配色：5 个颜色必须都是合法 6 位十六进制色值；任一非法则整体回退 null（用主题默认）
+  function normalizeColors(c) {
+    if (!c || typeof c !== "object") return null;
+    const out = {};
+    const ok = COLOR_KEYS.every(k => {
+      const v = c[k];
+      if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) { out[k] = v; return true; }
+      return false;
+    });
+    return ok ? out : null;
+  }
 
   // 站点条目：修正字段类型；URL 非法则整条丢弃
   function normalizeSite(s) {
@@ -206,7 +224,8 @@
       engines: DEFAULT_ENGINES.slice(),
       engineIndex: 0,
       theme: "system",
-      lang: "system"
+      lang: "system",
+      colors: null
     };
     if (!data || typeof data !== "object" || Array.isArray(data)) return out;
     if (Array.isArray(data.sites)) out.sites = data.sites.map(normalizeSite).filter(s => s !== null);
@@ -217,6 +236,7 @@
     if (Number.isInteger(idx) && idx >= 0 && idx < out.engines.length) out.engineIndex = idx;
     if (["system", "light", "dark"].includes(data.theme)) out.theme = data.theme;
     if (["system", "zh", "en"].includes(data.lang)) out.lang = data.lang;
+    out.colors = normalizeColors(data.colors);
     return out;
   }
 
@@ -273,7 +293,8 @@
       engines,
       engineIndex: getEngineIndex(),
       theme,
-      lang
+      lang,
+      colors
     };
     store.setJSON("homepage", data);
     // 迁移清理：旧版分散的 key 不再使用
@@ -314,6 +335,7 @@
     engineIndex = data.engineIndex;
     theme = data.theme;
     lang = data.lang;
+    colors = data.colors;
   }
 
   // 当前搜索地址：由引擎列表与索引派生，永不与 engineIndex 失步（参考建议 6.2）
@@ -332,6 +354,17 @@
         (mode === "system" && window.matchMedia("(prefers-color-scheme:dark)").matches)) {
       document.body.classList.add("dark");
     }
+  }
+
+  // 应用自定义配色：把颜色写到 body 的内联 CSS 变量（内联优先级最高，
+  // 同时覆盖亮/暗两套主题；colors 为 null 时移除，恢复主题默认色）
+  function applyColors() {
+    const root = document.body;
+    if (!colors) {
+      COLOR_KEYS.forEach(k => root.style.removeProperty("--" + k));
+      return;
+    }
+    COLOR_KEYS.forEach(k => root.style.setProperty("--" + k, colors[k]));
   }
 
   // ============================================================
@@ -852,14 +885,18 @@
     // 设置面板开关 + 同步各控件当前值
     $("settings").onclick = () => {
       const panel = $("panel");
-      panel.style.display = panel.style.display === "block" ? "none" : "block";
-      if (panel.style.display === "block") {
+      const opening = panel.style.display !== "block";
+      panel.style.display = opening ? "block" : "none";
+      if (opening) {
         $("theme-mode").value = theme;
         $("lang-mode").value = lang;
         $("card-columns").value = config.layout.columns || 6;
         $("hide-cards").checked = !!config.layout.hide;
+        syncColorInputs();
         renderEngineList();
         renderEditor();
+      } else {
+        applyColors(); // 关闭面板时撤销未保存的颜色预览
       }
     };
 
@@ -935,6 +972,54 @@
       applyTheme();
     });
 
+    // ---------- 自定义配色（按钮展开；保存 / 取消 / 恢复默认）----------
+    // 从 5 个颜色输入框收集当前值（不持久化）
+    function collectColorValues() {
+      const obj = {};
+      COLOR_KEYS.forEach(k => { obj[k] = $("color-" + k).value; });
+      return obj;
+    }
+    // 实时预览：只改内联变量，不动已保存的 colors
+    function previewColors() {
+      const root = document.body;
+      COLOR_KEYS.forEach(k => root.style.setProperty("--" + k, $("color-" + k).value));
+    }
+    // 面板打开时把颜色控件同步为当前状态（无自定义时取当前生效色）
+    function syncColorInputs() {
+      COLOR_KEYS.forEach(k => {
+        const el = $("color-" + k);
+        if (!el) return;
+        el.value = colors ? colors[k] :
+          getComputedStyle(document.body).getPropertyValue("--" + k).trim() || el.value;
+      });
+    }
+    COLOR_KEYS.forEach(k => {
+      const el = $("color-" + k);
+      if (!el) return;
+      el.addEventListener("input", previewColors);  // 取色过程实时预览
+      el.addEventListener("change", previewColors); // 取色器确认后仍先预览
+    });
+    // 展开/收起配色表单（与"添加网站/添加搜索引擎"交互一致）
+    $("show-color-form").onclick = () => $("color-form").classList.toggle("show");
+    $("color-save").onclick = () => {
+      colors = collectColorValues();  // 保存：提交为正式配色并持久化
+      saveState();
+      applyColors();
+      $("color-form").classList.remove("show");
+    };
+    $("color-cancel").onclick = () => {
+      applyColors();      // 取消：撤销预览，恢复已保存配色（无则用主题默认）
+      syncColorInputs();
+      $("color-form").classList.remove("show");
+    };
+    $("color-reset").onclick = () => {
+      colors = null;      // 恢复默认：清除配色并持久化
+      saveState();
+      applyColors();
+      syncColorInputs();
+      $("color-form").classList.remove("show");
+    };
+
     // 语言切换（立即重渲染）
     $("lang-mode").addEventListener("change", function () {
       lang = this.value;
@@ -991,6 +1076,7 @@
     saveState();  // 首次访问或迁移后落盘
     applyI18n();  // 需在 applyState 之后：语言取自已加载的状态
     applyTheme(); // 需在 applyState 之后：主题取自已加载的状态
+    applyColors();// 自定义配色取自已加载的状态
     renderEngines();
     renderSites();
   }

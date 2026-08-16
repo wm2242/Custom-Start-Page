@@ -415,6 +415,7 @@ function assert(cond, msg) {
     typeof exp5.layout.hide === "boolean", "导出包含卡片布局设置（列数/隐藏）");
   assert(Array.isArray(exp5.engines) && exp5.engines.length === 4, "导出包含引擎管理数据");
   assert(Array.isArray(exp5.sites), "导出包含卡片管理数据");
+  assert("colors" in exp5, "导出包含配色字段");
 
   // ---- 9.2 从输入控件发起拖拽不会触发排序拖拽（不干扰文本选取/编辑）----
   const detailInput = w5.document.querySelector("#engine-list .engine-detail input");
@@ -464,6 +465,69 @@ function assert(cond, msg) {
   dragAfterClose.dataTransfer = { _d: {}, setData(k, v) { this._d[k] = v; }, getData(k) { return this._d[k]; } };
   sortItem0.dispatchEvent(dragAfterClose);
   assert(dragAfterClose.dataTransfer._d.index !== undefined, "收起后拖拽排序恢复正常");
+
+  // ---- 14.x 自定义配色（按钮展开表单 + 保存/取消/恢复默认，与添加网站/引擎一致）----
+  const colorForm = w5.document.getElementById("color-form");
+  assert(!colorForm.classList.contains("show"), "配色表单初始收起");
+  w5.document.getElementById("show-color-form").click();
+  assert(colorForm.classList.contains("show"), "点击按钮展开配色表单");
+  w5.document.getElementById("show-color-form").click();
+  assert(!colorForm.classList.contains("show"), "再次点击按钮收起表单");
+  w5.document.getElementById("show-color-form").click();
+  assert(colorForm.classList.contains("show"), "重新展开配色表单");
+
+  // 调整颜色 → 仅实时预览，不持久化
+  w5.document.getElementById("color-bg").value = "#112233";
+  w5.document.getElementById("color-card").value = "#445566";
+  w5.document.getElementById("color-text").value = "#aabbcc";
+  w5.document.getElementById("color-secondary").value = "#ddeeff";
+  w5.document.getElementById("color-border").value = "#010203";
+  w5.document.getElementById("color-bg").dispatchEvent(new w5.Event("change", { bubbles: true }));
+  assert(w5.document.body.style.getPropertyValue("--bg").trim() === "#112233",
+    "调整颜色实时预览（内联变量已更新）");
+  assert(JSON.parse(w5.localStorage.getItem("homepage")).colors === null,
+    "未点保存前不持久化");
+
+  // 保存 → 持久化 + 表单收起
+  w5.document.getElementById("color-save").click();
+  const colState = JSON.parse(w5.localStorage.getItem("homepage")).colors;
+  assert(colState && colState.bg === "#112233" && colState.card === "#445566" &&
+    colState.text === "#aabbcc" && colState.secondary === "#ddeeff" && colState.border === "#010203",
+    "保存后 5 个配色持久化到统一存储");
+  assert(!colorForm.classList.contains("show"), "保存后表单收起");
+
+  // 再改颜色（预览）→ 取消 → 恢复已保存值 + 表单收起
+  w5.document.getElementById("show-color-form").click();
+  w5.document.getElementById("color-bg").value = "#fedcba";
+  w5.document.getElementById("color-bg").dispatchEvent(new w5.Event("input", { bubbles: true }));
+  assert(w5.document.body.style.getPropertyValue("--bg").trim() === "#fedcba",
+    "input 事件实时预览生效");
+  w5.document.getElementById("color-cancel").click();
+  assert(w5.document.body.style.getPropertyValue("--bg").trim() === "#112233",
+    "取消后撤销预览，恢复已保存配色");
+  assert(w5.document.getElementById("color-bg").value === "#112233",
+    "取消后颜色控件同步回已保存值");
+  assert(!colorForm.classList.contains("show"), "取消后表单收起");
+
+  // 恢复默认：colors 置 null 并移除内联变量 + 表单收起
+  w5.document.getElementById("show-color-form").click();
+  w5.document.getElementById("color-reset").click();
+  const afterReset = JSON.parse(w5.localStorage.getItem("homepage"));
+  assert(afterReset.colors === null, "恢复默认后 colors 为 null");
+  assert(w5.document.body.style.getPropertyValue("--bg").trim() === "",
+    "恢复默认后内联变量被移除");
+  assert(!colorForm.classList.contains("show"), "恢复默认后表单收起");
+
+  // 导入非法配色 → 归一化为 null
+  const badColorFile = new w5.File([JSON.stringify({
+    sites: [], colors: { bg: "red", card: "#ffffff", text: "#000000", secondary: "#666666", border: "#cccccc" }
+  })], "badcolor.json", { type: "application/json" });
+  Object.defineProperty(w5.document.getElementById("import-data"), "files",
+    { value: [badColorFile], configurable: true });
+  w5.document.getElementById("import-data").dispatchEvent(new w5.Event("change"));
+  await new Promise(r => setTimeout(r, 80));
+  const afterBadColor = JSON.parse(w5.localStorage.getItem("homepage"));
+  assert(afterBadColor.colors === null, "含非法色值的配色数据被归一化为 null");
 
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);
