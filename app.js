@@ -1,7 +1,7 @@
 // ============================================================
 // 自定义起始页 (Custom Start Page)
 // 纯前端：搜索引擎 + 导航卡片 + 主题 + 中英双语
-// 数据存储：localStorage（homepage/engines/engineIndex/theme/lang）
+// 数据存储：localStorage 单一 key（homepage，含 sites/layout/engines/engineIndex/theme/lang，见 persist 节）
 //
 // 代码结构（全部包在 IIFE 内，不污染全局作用域）：
 //   utils   —— 通用工具：DOM 快捷查询 / HTML 转义 / URL 白名单 / 存储封装
@@ -16,6 +16,11 @@
 //   boot    —— 启动
 //
 // 全局仅暴露 window.app（供模板内联事件使用），其余均为闭包私有。
+//
+// 浏览器兼容性：最低支持 2018 年及以后发布的浏览器
+//   Chrome 66+ / Edge 16+ / Firefox 52+ / Safari 11.1+
+//   不使用可选链、空值合并等 ES2020 语法；不支持 IE（缺 fetch/Element.closest/
+//   模板字符串/CSS Grid 等，需转译与 polyfill 才能运行，本项目不提供）。
 // ============================================================
 (function () {
   "use strict";
@@ -51,19 +56,19 @@
       try {
         const v = localStorage.getItem(key);
         return v === null ? fallback : v;
-      } catch { return fallback; }
+      } catch (e) { return fallback; }
     },
     set(key, value) {
-      try { localStorage.setItem(key, value); } catch {}
+      try { localStorage.setItem(key, value); } catch (e) {}
     },
     getJSON(key) {
       try {
         const v = localStorage.getItem(key);
         return v ? JSON.parse(v) : null;
-      } catch { return null; }
+      } catch (e) { return null; }
     },
     setJSON(key, value) {
-      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
     }
   };
 
@@ -89,7 +94,8 @@
       keyword: "关键词",
       confirm_delete: "确定删除此卡片？", at_least_one: "至少保留一个搜索引擎",
       keyword_dup: "关键词重复", engine_url_invalid: "搜索地址无效，需包含查询参数（如 ?q= 或 %s）",
-      import_fail: "导入失败"
+      import_fail: "导入失败", import_too_large: "备份文件过大（超过 {n} MB）",
+      import_version: "备份由更新版本导出，无法导入"
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
@@ -109,11 +115,12 @@
       keyword: "Keyword",
       confirm_delete: "Delete this card?", at_least_one: "Keep at least one search engine",
       keyword_dup: "Keyword already exists", engine_url_invalid: "Invalid search URL — must contain a query parameter (e.g. ?q= or %s)",
-      import_fail: "Import failed"
+      import_fail: "Import failed", import_too_large: "Backup file too large (over {n} MB)",
+      import_version: "Backup exported by a newer version — cannot import"
     }
   };
 
-  let lang = store.get("lang", "system"); // 语言偏好：system/zh/en
+  // 语言偏好 lang 在 state 节声明（system/zh/en）
 
   // 返回实际生效的语言代码（zh/en）
   function curLang() {
@@ -140,17 +147,23 @@
   // ============================================================
   // state —— 应用状态（闭包私有，不挂全局）
   // ============================================================
-  let config;              // 站点配置（含 sites/layout/search）
-  let engines = [          // 搜索引擎列表（可被 localStorage 覆盖）
+  // 全部持久化数据统一收口在 saveState()/loadState()（单一 key: homepage），
+  // 避免分散存储导致导出/导入遗漏（参考建议 6.1）；内存中按职责拆分子对象。
+  const DEFAULT_ENGINES = [ // 默认搜索引擎列表
     { name: "Google",     url: "https://www.google.com/search?q=", keyword: "g" },
     { name: "Bing",       url: "https://www.bing.com/search?q=",   keyword: "b" },
     { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=",       keyword: "ddg" },
     { name: "百度",        url: "https://www.baidu.com/s?wd=",      keyword: "bd" },
     { name: "GitHub",     url: "https://github.com/search?q=",     keyword: "gh" }
   ];
-  let editIndex = -1;      // 正在编辑的卡片索引（-1 = 新增模式）
   const defaultLayout = { columns: 6, hide: false };  // 卡片布局默认值
-  const DEFAULT_SEARCH = "https://www.google.com/search?q=";  // 默认搜索地址
+
+  let config = { sites: [], layout: Object.assign({}, defaultLayout) }; // 站点与布局
+  let engines = DEFAULT_ENGINES.slice();               // 搜索引擎列表
+  let engineIndex = 0;                                 // 当前引擎索引
+  let theme = "system";                                // 主题：system/light/dark
+  let lang = "system";                                 // 语言：system/zh/en
+  let editIndex = -1;                                  // 正在编辑的卡片索引（-1 = 新增模式）
 
   // ============================================================
   // normalize —— 数据校验与归一化（参考建议 3.1 / 3.2）
@@ -174,7 +187,7 @@
 
   // 布局：columns 必须是 2–10 的整数，否则用默认值
   function normalizeLayout(l) {
-    const out = { ...defaultLayout };
+    const out = Object.assign({}, defaultLayout);
     if (l && typeof l === "object") {
       const cols = Number(l.columns);
       if (Number.isInteger(cols) && cols >= 2 && cols <= 10) out.columns = cols;
@@ -183,13 +196,27 @@
     return out;
   }
 
-  // 整体配置：sites 确保是数组、search 确保是合法搜索地址、layout 归一化
-  function normalizeConfig(data) {
-    const out = { search: DEFAULT_SEARCH, sites: [], layout: normalizeLayout() };
+  // 整体状态归一化：统一校验 站点/布局/引擎/引擎索引/主题/语言 并补默认值。
+  // search 不再存储——搜索地址由 engines[engineIndex] 派生（参考建议 6.2）
+  function normalizeState(data) {
+    const out = {
+      version: 2,
+      sites: [],
+      layout: normalizeLayout(),
+      engines: DEFAULT_ENGINES.slice(),
+      engineIndex: 0,
+      theme: "system",
+      lang: "system"
+    };
     if (!data || typeof data !== "object" || Array.isArray(data)) return out;
-    if (typeof data.search === "string" && isValidEngineUrl(data.search)) out.search = data.search;
     if (Array.isArray(data.sites)) out.sites = data.sites.map(normalizeSite).filter(s => s !== null);
     out.layout = normalizeLayout(data.layout);
+    const eng = normalizeEngines(data.engines);
+    if (eng) out.engines = eng;
+    const idx = Number(data.engineIndex);
+    if (Number.isInteger(idx) && idx >= 0 && idx < out.engines.length) out.engineIndex = idx;
+    if (["system", "light", "dark"].includes(data.theme)) out.theme = data.theme;
+    if (["system", "zh", "en"].includes(data.lang)) out.lang = data.lang;
     return out;
   }
 
@@ -230,11 +257,76 @@
   }
 
   // ============================================================
+  // persist —— 持久化（统一单一 key，参考建议 6.1）
+  // 全部数据（站点/布局/引擎/引擎索引/主题/语言）存进一个 localStorage key，
+  // 导出直接序列化它、导入整体恢复，杜绝"分散存储导致遗漏"。
+  // ============================================================
+  const STATE_VERSION = 2;
+  const MAX_IMPORT_SIZE = 5 * 1024 * 1024;  // 导入文件大小上限：5MB（防止解析超大文件卡顿）
+
+  // 把内存状态整体写入单一 key；顺带清理迁移前遗留的旧 key。返回写入的数据对象
+  function saveState() {
+    const data = {
+      version: STATE_VERSION,
+      sites: config.sites,
+      layout: config.layout,
+      engines,
+      engineIndex: getEngineIndex(),
+      theme,
+      lang
+    };
+    store.setJSON("homepage", data);
+    // 迁移清理：旧版分散的 key 不再使用
+    ["engines", "engineIndex", "theme", "lang"].forEach(k => {
+      try { localStorage.removeItem(k); } catch (e) {}
+    });
+    return data;
+  }
+
+  // 读取统一状态；若为旧格式（无 version 或散落旧 key），合并迁移为统一结构；
+  // 全新用户（无任何本地数据）返回 null，由调用方回退 config.json
+  function loadState() {
+    const raw = store.getJSON("homepage");
+    if (raw && raw.version === STATE_VERSION) return raw;
+    const legacyEngines = store.getJSON("engines");
+    const legacyIndex = store.get("engineIndex", null);
+    const legacyTheme = store.get("theme", null);
+    const legacyLang = store.get("lang", null);
+    if (!raw && !legacyEngines && legacyIndex === null && legacyTheme === null && legacyLang === null) {
+      return null; // 全新用户：无任何本地数据
+    }
+    return {
+      version: STATE_VERSION,
+      sites: raw && raw.sites,
+      layout: raw && raw.layout,
+      engines: (raw && raw.engines) || legacyEngines,
+      engineIndex: (raw && raw.engineIndex !== undefined) ? raw.engineIndex : Number(legacyIndex || 0),
+      theme: (raw && raw.theme) || legacyTheme || "system",
+      lang: (raw && raw.lang) || legacyLang || "system"
+    };
+  }
+
+  // 把归一化后的数据应用到内存状态
+  function applyState(data) {
+    config.sites = data.sites;
+    config.layout = data.layout;
+    engines = data.engines;
+    engineIndex = data.engineIndex;
+    theme = data.theme;
+    lang = data.lang;
+  }
+
+  // 当前搜索地址：由引擎列表与索引派生，永不与 engineIndex 失步（参考建议 6.2）
+  function currentSearch() {
+    return engines[getEngineIndex()].url;
+  }
+
+  // ============================================================
   // theme —— 主题
   // ============================================================
   // 应用主题：dark / light / system（跟随系统 prefers-color-scheme）
   function applyTheme() {
-    const mode = store.get("theme", "system");
+    const mode = theme;
     document.body.classList.remove("dark");
     if (mode === "dark" ||
         (mode === "system" && window.matchMedia("(prefers-color-scheme:dark)").matches)) {
@@ -282,29 +374,27 @@
 
   // 读取并校验当前引擎索引（越界回退 0）
   function getEngineIndex() {
-    let i = Number(store.get("engineIndex", 0));
+    let i = Number(engineIndex);
     if (Number.isNaN(i) || i < 0 || i >= engines.length) i = 0;
     return i;
   }
 
-  // 保存引擎索引（越界回退 0），返回实际生效的索引
+  // 设置引擎索引（越界回退 0），立即持久化，返回实际生效的索引
   function setEngineIndex(i) {
     i = Number(i);
     if (Number.isNaN(i) || i < 0 || i >= engines.length) i = 0;
-    store.set("engineIndex", i);
+    engineIndex = i;
+    saveState();
     return i;
   }
 
-  // 同步下拉框：重建选项、恢复选中、更新 config.search 并持久化
+  // 同步下拉框：重建选项并恢复选中（search 由 engines[engineIndex] 派生，无需存储）
   function syncEngineSelect() {
     const select = $("engine");
     select.innerHTML = engines
       .map((e, i) => `<option value="${i}">${escapeHtml(e.name)}</option>`)
       .join("");
-    const idx = getEngineIndex();
-    select.value = idx;
-    config.search = engines[idx].url;
-    store.setJSON("homepage", config);
+    select.value = getEngineIndex();
   }
 
   // 设置面板：搜索引擎管理列表（可拖拽排序、内联编辑、删除）
@@ -362,11 +452,12 @@
 
   function toggleEngineDetail(i) { toggleDetail("engine-detail", i); }
 
-  // 编辑引擎字段（name/url/keyword）；url 需通过搜索地址校验
+  // 编辑引擎字段（name/url/keyword）；url 校验搜索地址、keyword 校验重复
   function editEngine(i, key, value) {
     if (key === "url" && !isValidEngineUrl(value)) { alert(t("engine_url_invalid")); return; }
+    if (key === "keyword" && !keywordUnique(value, i)) { alert(t("keyword_dup")); return; }
     engines[i][key] = value.trim();
-    store.setJSON("engines", engines);
+    saveState();
     renderEngines();
   }
 
@@ -374,26 +465,24 @@
   function deleteEngine(i) {
     if (engines.length <= 1) { alert(t("at_least_one")); return; }
     engines.splice(i, 1);
-    store.setJSON("engines", engines);
-    if (Number(store.get("engineIndex", 0)) >= engines.length) store.set("engineIndex", 0);
+    if (getEngineIndex() >= engines.length) engineIndex = 0;
+    saveState();
     renderEngines();
   }
 
   // 切换当前搜索引擎
   function changeEngine(i) {
-    const idx = setEngineIndex(i);
-    config.search = engines[idx].url;
-    store.setJSON("homepage", config);
+    const idx = setEngineIndex(i);  // 同时持久化 engineIndex
     $("engine").value = idx;
     refreshSearchMenu(); // 菜单此刻是打开的，刷新后再关闭
     $("search-engine-menu").classList.remove("open");
   }
 
-  // 检查快捷关键词是否重复（排除当前编辑项）
-  function keywordUnique(k) {
+  // 检查快捷关键词是否重复（排除 excludeIndex 对应的引擎；-1 = 全部检查）
+  function keywordUnique(k, excludeIndex) {
     k = (k || "").trim().toLowerCase();
     if (!k) return true;
-    return !engines.some((e, i) => i !== editIndex && (e.keyword || "").trim().toLowerCase() === k);
+    return !engines.some((e, i) => i !== excludeIndex && (e.keyword || "").trim().toLowerCase() === k);
   }
 
   // 添加新搜索引擎（表单提交）
@@ -404,9 +493,9 @@
     const keyword = keyEl.value.trim().toLowerCase();
     if (!nameEl.value.trim() || !urlEl.value.trim()) return;
     if (!isValidEngineUrl(urlEl.value)) { alert(t("engine_url_invalid")); return; }
-    if (!keywordUnique(keyword)) { alert(t("keyword_dup")); return; }
+    if (!keywordUnique(keyword, -1)) { alert(t("keyword_dup")); return; }
     engines.push({ name: nameEl.value.trim(), url: urlEl.value.trim(), keyword });
-    store.setJSON("engines", engines);
+    saveState();
     renderEngines();
     nameEl.value = ""; urlEl.value = ""; keyEl.value = "";
     $("engine-form").classList.remove("show");
@@ -445,6 +534,7 @@
   // 渲染主页面：卡片网格 + 添加卡片 + 设置面板编辑器
   function renderSites() {
     const box = $("sites");
+    if (!box || !Array.isArray(config.sites)) return;  // 防御：数据未就绪时安全返回
     box.innerHTML = "";
     box.style.setProperty("--columns", config.layout.columns || 6);
     const hidden = !!config.layout.hide;
@@ -454,7 +544,7 @@
 
     config.sites.forEach((site, i) => {
       let host;
-      try { host = new URL(site.url).hostname; } catch { return; } // 跳过非法 URL
+      try { host = new URL(site.url).hostname; } catch (e) { return; } // 跳过非法 URL
       const link = document.createElement("a");
       link.className = "shortcut";
       link.href = safeUrl(site.url);
@@ -488,7 +578,7 @@
   // 设置面板：导航卡片管理列表（可拖拽排序、内联编辑）
   function renderEditor() {
     const box = $("editor");
-    if (!box) return;
+    if (!box || !Array.isArray(config.sites)) return;  // 防御：数据未就绪时安全返回
     box.innerHTML = config.sites.map((site, i) => `
 <div class="card-sort-item" draggable="true" data-index="${i}">
   <div class="card-title">
@@ -516,7 +606,7 @@
       const titleEl = cardEl.querySelector(".shortcut-title");
       if (titleEl) titleEl.textContent = site.name;
       let host = null;
-      try { host = new URL(site.url).hostname; } catch {}
+      try { host = new URL(site.url).hostname; } catch (e) {}
       if (host) {
         const iconBox = cardEl.querySelector(".shortcut-icon");
         if (iconBox) iconBox.innerHTML = siteIcon(site, host);
@@ -568,7 +658,7 @@
   function removeCard(i) {
     if (confirm(t("confirm_delete"))) {
       config.sites.splice(i, 1);
-      store.setJSON("homepage", config);
+      saveState();
       renderSites();
     }
   }
@@ -590,12 +680,12 @@
     if (editIndex >= 0) {
       // 编辑既有卡片：就地更新对应 DOM，避免整页重绘（参考建议 4.1）
       config.sites[editIndex] = data;
-      store.setJSON("homepage", config);
+      saveState();
       syncSiteViews(editIndex);
     } else {
       // 新增卡片
       config.sites.push(data);
-      store.setJSON("homepage", config);
+      saveState();
       renderSites();
     }
     closeCardEditor();
@@ -617,7 +707,7 @@
       if (value === "#") return;
     }
     config.sites[i][key] = value;
-    store.setJSON("homepage", config);
+    saveState();
     syncSiteViews(i);
   }
 
@@ -632,7 +722,7 @@
     };
     if (data.url === "#") return; // 非法 URL 拒绝保存
     config.sites.push(data);
-    store.setJSON("homepage", config);
+    saveState();
     renderSites();
     nameEl.value = "";
     urlEl.value = "";
@@ -643,36 +733,45 @@
   // data —— 数据管理与布局
   // ============================================================
 
-  // 导出全部配置为 JSON 文件
+  // 当前时间戳：YYYYMMDD-HHMMSS（用于备份文件名，避免同名覆盖）
+  function timestamp() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, "0");
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+      "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  }
+
+  // 导出全部配置为 JSON 文件：直接序列化统一状态（含 version），文件名带时间戳
   function exportData() {
-    const data = {
-      sites: config.sites,
-      engines,
-      layout: config.layout,
-      engineIndex: getEngineIndex()
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(saveState(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "homepage-backup.json";
+    a.download = "homepage-backup-" + timestamp() + ".json";
     a.click();
   }
 
   // 从 JSON 文件导入配置（渲染时已有 esc/safeUrl 防护；结构经 normalize 校验）
+  // 导入前先做两道防线：文件大小上限 + 备份版本号校验
   function importData(file) {
+    if (file.size > MAX_IMPORT_SIZE) {
+      alert(t("import_too_large").replace("{n}", String(MAX_IMPORT_SIZE / 1024 / 1024)));
+      return;
+    }
     const reader = new FileReader();
     reader.onload = e => {
       try {
         const data = JSON.parse(e.target.result);
-        config = normalizeConfig(data);                  // sites/layout/search 逐字段校验
-        const importedEngines = normalizeEngines(data.engines);
-        if (importedEngines) engines = importedEngines;  // 引擎数据非法则保留现有
-        if (data.engineIndex !== undefined) store.set("engineIndex", Number(data.engineIndex) || 0);
-        store.setJSON("homepage", config);
-        store.setJSON("engines", engines);
+        // 版本校验：更高版本导出的备份结构未知，拒绝导入（缺失/旧版本则照常归一化）
+        const v = data && data.version;
+        if (typeof v === "number" && v > STATE_VERSION) {
+          alert(t("import_version"));
+          return;
+        }
+        applyState(normalizeState(data));  // 站点/布局/引擎/索引/主题/语言整体归一化导入
+        saveState();
         renderEngines();
         renderSites();
-      } catch { alert(t("import_fail")); }
+      } catch (e) { alert(t("import_fail")); }
     };
     reader.readAsText(file);
   }
@@ -684,7 +783,7 @@
     const n = Number(input.value);
     if (n >= 2 && n <= 10) config.layout.columns = n;
     config.layout.hide = hide.checked;
-    store.setJSON("homepage", config);
+    saveState();
     renderSites();
   }
 
@@ -721,8 +820,8 @@
     });
 
     // 拖拽排序 + 卡片右键菜单：事件委托，只绑定一次（列表重建无需重新绑定）
-    const commitSites = () => { store.setJSON("homepage", config); renderSites(); };
-    const commitEngines = () => { store.setJSON("engines", engines); renderEngines(); };
+    const commitSites = () => { saveState(); renderSites(); };
+    const commitEngines = () => { saveState(); renderEngines(); };
     attachDelegatedDragSort($("sites"), () => config.sites, commitSites);
     attachDelegatedDragSort($("engine-list"), () => engines, commitEngines);
     attachDelegatedDragSort($("editor"), () => config.sites, commitSites);
@@ -738,8 +837,8 @@
       const panel = $("panel");
       panel.style.display = panel.style.display === "block" ? "none" : "block";
       if (panel.style.display === "block") {
-        $("theme-mode").value = store.get("theme", "system");
-        $("lang-mode").value = store.get("lang", "system");
+        $("theme-mode").value = theme;
+        $("lang-mode").value = lang;
         $("card-columns").value = config.layout.columns || 6;
         $("hide-cards").checked = !!config.layout.hide;
         renderEngineList();
@@ -803,14 +902,15 @@
 
     // 主题切换
     $("theme-mode").addEventListener("change", function () {
-      store.set("theme", this.value);
+      theme = this.value;
+      saveState();
       applyTheme();
     });
 
     // 语言切换（立即重渲染）
     $("lang-mode").addEventListener("change", function () {
       lang = this.value;
-      store.set("lang", lang);
+      saveState();
       applyI18n();
       renderEngines();
       renderSites();
@@ -836,34 +936,33 @@
       // `!xxx` → 强制用当前引擎
       if (query.startsWith("!")) {
         query = query.slice(1).trim();
-        location.href = buildSearchUrl(config.search, query);
+        location.href = buildSearchUrl(currentSearch(), query);
         return;
       }
 
-      location.href = buildSearchUrl(config.search, query);
+      location.href = buildSearchUrl(currentSearch(), query);
     });
   }
 
   // ============================================================
   // boot —— 启动
   // ============================================================
-  // 读取 config.json；任何失败（404/网络/JSON 错误）都回退空对象，由 normalizeConfig 补默认值
+  // 读取 config.json；任何失败（404/网络/JSON 错误）都回退空对象，由 normalizeState 补默认值
   async function fetchConfig() {
     try {
       const res = await fetch("config.json");
       if (!res.ok) throw new Error("HTTP " + res.status);
       return await res.json();
-    } catch { return {}; }
+    } catch (e) { return {}; }
   }
 
   async function load() {
     bindEvents();
-    applyI18n();
-    applyTheme();
-    // localStorage 数据损坏 → getJSON 返回 null → 回退 config.json → 再回退空配置
-    config = normalizeConfig(store.getJSON("homepage") || await fetchConfig());
-    const savedEngines = normalizeEngines(store.getJSON("engines"));
-    if (savedEngines) engines = savedEngines;
+    // 统一读取：单 key 优先，旧散落 key 自动迁移；损坏 → config.json → 空配置
+    applyState(normalizeState(loadState() || await fetchConfig()));
+    saveState();  // 首次访问或迁移后落盘
+    applyI18n();  // 需在 applyState 之后：语言取自已加载的状态
+    applyTheme(); // 需在 applyState 之后：主题取自已加载的状态
     renderEngines();
     renderSites();
   }

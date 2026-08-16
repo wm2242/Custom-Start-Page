@@ -164,6 +164,7 @@ margin:45px auto 0;
 width:700px;
 max-width:90vw;
 display:grid;
+grid-template-columns:repeat(6,96px); /* 兜底：不支持 CSS 变量/var-in-repeat 时固定 6 列 */
 grid-template-columns:repeat(var(--columns),96px);
 justify-content:center;
 gap:16px;
@@ -333,7 +334,9 @@ padding:8px;
 border-radius:8px;
 display:flex;
 align-items:center;
-gap:4px;
+}
+.collapse-title > span + span{
+margin-left:4px; /* 旧浏览器（不支持 flex gap）用 margin 模拟间距 */
 }
 
 .collapse-title:hover{
@@ -381,8 +384,10 @@ margin-bottom:8px;
 .card-setting{
 display:flex;
 align-items:center;
-gap:8px;
 margin:8px 0;
+}
+.card-setting > * + *{
+margin-left:8px; /* 旧浏览器（不支持 flex gap）用 margin 模拟间距 */
 }
 
 .card-setting input[type=number]{
@@ -660,7 +665,9 @@ display:block;
 
 .form-buttons{
 display:flex;
-gap:10px;
+}
+.form-buttons > * + *{
+margin-left:10px; /* 旧浏览器（不支持 flex gap）用 margin 模拟间距 */
 }
 
 

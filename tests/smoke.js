@@ -64,16 +64,20 @@ function assert(cond, msg) {
   menu.querySelector(".search-engine-item").click(); // 选择当前引擎
   assert(!menu.classList.contains("open"), "选择引擎后菜单关闭");
   const saved = JSON.parse(window.localStorage.getItem("homepage"));
-  assert(saved.search === "https://www.google.com/search?q=", "config.search 已同步并持久化");
+  assert(saved.search === undefined, "search 不再单独存储（由 engines+engineIndex 派生）");
+  assert(saved.engines[saved.engineIndex].url === "https://www.google.com/search?q=",
+    "当前搜索地址 = engines[engineIndex].url（单一 key 存储）");
 
   // ---- 国际化切换 ----
   const langSel = document.getElementById("lang-mode");
   langSel.value = "en";
   langSel.dispatchEvent(new window.Event("change"));
   assert(document.querySelector(".logo").textContent === "Custom Start Page", "切英文后标题变为英文");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).lang === "en", "语言已并入统一 key");
   langSel.value = "zh";
   langSel.dispatchEvent(new window.Event("change"));
   assert(document.querySelector(".logo").textContent === "自定义起始页", "切回中文后标题恢复");
+  assert(window.localStorage.getItem("lang") === null, "旧 lang key 已清理");
 
   // ---- 拖拽排序（网格，走事件委托）----
   function dragEvent(type, fromIdx) {
@@ -101,7 +105,7 @@ function assert(cond, msg) {
   const engItems = document.querySelectorAll("#engine-list .engine-sort-item");
   engItems[0].dispatchEvent(dragEvent("dragstart", 0));
   engItems[2].dispatchEvent(dragEvent("drop", 0));
-  const savedEngines = JSON.parse(window.localStorage.getItem("engines"));
+  const savedEngines = JSON.parse(window.localStorage.getItem("homepage")).engines;
   assert(savedEngines[0].name === "Bing", "引擎拖拽后 Bing 移到第一位");
   assert(document.querySelector("#engine option").textContent === "Bing", "引擎下拉框顺序同步更新");
 
@@ -168,6 +172,17 @@ function assert(cond, msg) {
   assert(document.querySelector('#sites a.shortcut[data-index="0"]').href === "https://inplace.example.com/",
     "内联编辑 URL 后网格卡片链接就地更新");
 
+  // ---- 6.1 主题并入统一存储 ----
+  const themeSel = document.getElementById("theme-mode");
+  themeSel.value = "dark";
+  themeSel.dispatchEvent(new window.Event("change"));
+  const unif = JSON.parse(window.localStorage.getItem("homepage"));
+  assert(unif.theme === "dark", "主题切换写入统一 key");
+  assert(window.localStorage.getItem("theme") === null, "旧 theme key 已清理");
+  assert(document.body.classList.contains("dark"), "暗色主题已生效");
+  themeSel.value = "system";
+  themeSel.dispatchEvent(new window.Event("change"));
+
   // ================= 健壮性用例（参考建议 3.1–3.4） =================
 
   // ---- 3.4 添加无效搜索地址被拒绝 ----
@@ -177,7 +192,7 @@ function assert(cond, msg) {
   document.getElementById("engine-url").value = "https://example.com"; // 无查询参数
   document.getElementById("save-engine").click();
   assert(lastAlert !== null, "无查询参数的搜索地址被拒绝并提示");
-  assert(JSON.parse(window.localStorage.getItem("engines")).length === 5, "拒绝后引擎列表未变化");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5, "拒绝后引擎列表未变化");
   window.alert = () => {};
 
   // ---- 3.2 导入结构损坏的数据被归一化 ----
@@ -188,14 +203,57 @@ function assert(cond, msg) {
     engines: [null, { name: "E1", url: "https://e1.com/search?q=" }], // 含非法条目
     engineIndex: 0
   })], "bad.json", { type: "application/json" });
-  Object.defineProperty(importInput, "files", { value: [badFile] });
+  Object.defineProperty(importInput, "files", { value: [badFile], configurable: true });
   importInput.dispatchEvent(new window.Event("change"));
   await new Promise(r => setTimeout(r, 100));
   const norm = JSON.parse(window.localStorage.getItem("homepage"));
   assert(Array.isArray(norm.sites) && norm.sites.length === 0, "导入时 sites 非数组 → 归一化为空数组");
   assert(norm.layout.columns === 6 && norm.layout.hide === true, "导入时非法列数 → 回退默认 6，hide 保留");
-  const impEngines = JSON.parse(window.localStorage.getItem("engines"));
+  const impEngines = JSON.parse(window.localStorage.getItem("homepage")).engines;
   assert(impEngines.length === 1 && impEngines[0].name === "E1", "导入引擎跳过非法条目，只保留合法项");
+
+  // ---- 7.1 导出：文件名带时间戳 + 内容含版本号 ----
+  let capturedBlob = null;
+  const origCreate = window.URL.createObjectURL;
+  window.URL.createObjectURL = b => { capturedBlob = b; return "blob:test"; };
+  let capturedAnchor = null;
+  const origClick = window.HTMLAnchorElement.prototype.click;
+  window.HTMLAnchorElement.prototype.click = function () { capturedAnchor = this; };
+  document.getElementById("export-data").click();
+  window.URL.createObjectURL = origCreate;
+  window.HTMLAnchorElement.prototype.click = origClick;
+  assert(capturedAnchor && /^homepage-backup-\d{8}-\d{6}\.json$/.test(capturedAnchor.download),
+    "导出文件名带时间戳（homepage-backup-YYYYMMDD-HHMMSS.json）");
+  const exported = JSON.parse(await capturedBlob.text());
+  assert(exported.version === 2, "导出内容包含格式版本号");
+  assert(Array.isArray(exported.sites) && Array.isArray(exported.engines) &&
+    exported.layout && exported.theme && exported.lang,
+    "导出包含全部数据字段（sites/layout/engines/engineIndex/theme/lang）");
+
+  // ---- 7.2 导入：更新版本的备份被拒绝 ----
+  lastAlert = null;
+  window.alert = m => { lastAlert = m; };
+  const verFile = new window.File([JSON.stringify({ version: 99, sites: [] })],
+    "future.json", { type: "application/json" });
+  Object.defineProperty(importInput, "files", { value: [verFile], configurable: true });
+  importInput.dispatchEvent(new window.Event("change"));
+  await new Promise(r => setTimeout(r, 50));
+  assert(lastAlert !== null && lastAlert !== "import_version",
+    "更高版本备份被拒绝并提示（i18n 已解析）");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).version === 2,
+    "拒绝后本地数据未变（仍为当前版本）");
+
+  // ---- 7.3 导入：超大文件被拒绝，不解析 ----
+  lastAlert = null;
+  const bigFile = new window.File([new Array(6 * 1024 * 1024).join("x")],
+    "big.json", { type: "application/json" });
+  assert(bigFile.size > 5 * 1024 * 1024, "构造 6MB 测试文件");
+  Object.defineProperty(importInput, "files", { value: [bigFile], configurable: true });
+  importInput.dispatchEvent(new window.Event("change"));
+  await new Promise(r => setTimeout(r, 50));
+  assert(lastAlert !== null && lastAlert !== "import_too_large",
+    "超大备份文件被拒绝并提示（i18n 已解析）");
+  window.alert = () => {};
 
   // ---- 3.1 localStorage 数据损坏 + config.json 加载失败 → 不崩溃，回退默认 ----
   const dom2 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
@@ -228,6 +286,77 @@ function assert(cond, msg) {
   assert(w3.document.getElementById("sites").querySelectorAll("a.shortcut").length === 4,
     "localStorage 禁用时仍从 config.json 渲染 4 张卡片");
   assert(w3.document.getElementById("engine").options.length === 5, "localStorage 禁用时默认引擎可用");
+
+  // ---- 6.1 旧版分散 key 自动迁移为统一 key ----
+  const dom4 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const w4 = dom4.window;
+  w4.matchMedia = () => ({ matches: false });
+  w4.alert = () => {};
+  w4.fetch = window.fetch;
+  w4.navigator.language = "zh-CN"; // 固定系统语言为中文：英文标题只可能来自迁移的 lang=en
+  w4.localStorage.setItem("homepage", JSON.stringify({ // 旧格式：无 version，含 search
+    search: "https://legacy.example.com/search?q=",
+    sites: [{ name: "旧站", url: "https://legacy.example.com", iconType: "auto", icon: "" }],
+    layout: { columns: 4, hide: false }
+  }));
+  w4.localStorage.setItem("engines", JSON.stringify([{ name: "旧引擎", url: "https://legacy.example.com/search?q=", keyword: "l" }]));
+  w4.localStorage.setItem("engineIndex", "0");
+  w4.localStorage.setItem("theme", "dark");
+  w4.localStorage.setItem("lang", "en");
+  w4.eval(appCode);
+  await new Promise(r => setTimeout(r, 100));
+  const migrated = JSON.parse(w4.localStorage.getItem("homepage"));
+  assert(migrated.version === 2, "迁移后写入 version:2 的统一结构");
+  assert(migrated.sites[0].name === "旧站" && migrated.engines[0].name === "旧引擎",
+    "旧 homepage + engines 合并迁移");
+  assert(migrated.theme === "dark" && migrated.lang === "en", "旧 theme/lang 已迁移");
+  assert(migrated.search === undefined, "旧 search 字段被丢弃（改为派生）");
+  assert(w4.localStorage.getItem("engines") === null && w4.localStorage.getItem("theme") === null &&
+    w4.localStorage.getItem("lang") === null && w4.localStorage.getItem("engineIndex") === null,
+    "迁移后旧 key 全部清理");
+  assert(w4.document.body.classList.contains("dark"), "迁移的暗色主题已生效");
+  assert(w4.document.querySelector(".logo").textContent === "Custom Start Page", "迁移的英文语言已生效");
+  assert(w4.document.getElementById("sites").querySelectorAll("a.shortcut").length === 1,
+    "迁移的旧站点已渲染");
+
+  // ---- 8.1 编辑引擎时校验关键词重复 ----
+  // ---- 8.2 删除引擎后索引越界自动回退，派生搜索无失效引用 ----
+  const dom5 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const w5 = dom5.window;
+  w5.matchMedia = () => ({ matches: false });
+  w5.fetch = window.fetch;
+  let alert5 = null;
+  w5.alert = m => { alert5 = m; };
+  w5.eval(appCode);
+  await new Promise(r => setTimeout(r, 100));
+
+  // 8.1 编辑关键词为已有值 → 拒绝；不重复 → 允许
+  const kwInputs = w5.document.querySelectorAll("#engine-list .engine-detail input");
+  const item1Keyword = kwInputs[1 * 3 + 2]; // 第 2 个引擎（Bing, keyword=b）的关键词输入框
+  alert5 = null;
+  item1Keyword.value = "g"; // 与第 1 个引擎（Google, keyword=g）重复
+  item1Keyword.dispatchEvent(new w5.Event("change", { bubbles: true }));
+  assert(alert5 !== null && alert5 !== "keyword_dup", "编辑引擎为重复关键词被拒绝（i18n 已解析）");
+  assert(JSON.parse(w5.localStorage.getItem("homepage")).engines[1].keyword === "b",
+    "重复关键词未写入");
+  alert5 = null;
+  item1Keyword.value = "zz";
+  item1Keyword.dispatchEvent(new w5.Event("change", { bubbles: true }));
+  assert(alert5 === null &&
+    JSON.parse(w5.localStorage.getItem("homepage")).engines[1].keyword === "zz",
+    "不重复的关键词可正常编辑");
+
+  // 8.2 选中最后一个引擎后删除第一个 → 索引越界自动回退 0，无失效 search 引用
+  const engineSel5 = w5.document.getElementById("engine");
+  engineSel5.value = "4";
+  engineSel5.dispatchEvent(new w5.Event("change"));
+  assert(JSON.parse(w5.localStorage.getItem("homepage")).engineIndex === 4, "已选中最后一个引擎");
+  w5.document.querySelector("#engine-list .engine-sort-item button").click(); // 删除第 1 个（Google）
+  const st5 = JSON.parse(w5.localStorage.getItem("homepage"));
+  assert(st5.engines.length === 4, "删除后剩 4 个引擎");
+  assert(st5.engineIndex === 0, "索引越界自动回退到 0");
+  assert(st5.search === undefined, "无失效的 search 引用（搜索地址由 engines[0] 派生）");
+  assert(engineSel5.value === "0", "下拉框同步回退到第 1 个引擎");
 
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);
