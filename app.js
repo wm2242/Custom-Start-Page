@@ -6,6 +6,20 @@ let config,theme="system",engines=[
 {name:"GitHub",url:"https://github.com/search?q=",keyword:"gh"}
 ],editIndex=-1,layout={columns:6,hide:false};
 
+function esc(s){
+return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function safeUrl(u){
+u=(u||"").trim();
+if(!u)return "#";
+try{
+let p=new URL(u);
+if(p.protocol==="http:"||p.protocol==="https:")return u;
+}catch(e){}
+return "#";
+}
+
 function applyTheme(){
 
 let mode=localStorage.getItem("theme")||"system";
@@ -77,7 +91,7 @@ let select=document.getElementById("engine");
 select.innerHTML="";
 
 engines.forEach((e,i)=>{
-select.innerHTML+=`<option value="${i}">${e.name}</option>`;
+select.innerHTML+=`<option value="${i}">${esc(e.name)}</option>`;
 });
 
 let index=Number(localStorage.getItem("engineIndex")||0);
@@ -101,14 +115,14 @@ engines.forEach((e,i)=>{
 box.innerHTML+=`
 <div class="engine-sort-item" draggable="true" data-index="${i}">
 <div class="engine-title">
-<span>${i+1}. ${e.name}</span>
+<span>${i+1}. ${esc(e.name)}</span>
 <span onclick="toggleEngineDetail(${i})">⌄</span>
 </div>
 
 <div class="engine-detail" id="engine-detail-${i}">
-<input value="${e.name}" onchange="editEngine(${i},'name',this.value)">
-<input value="${e.url}" onchange="editEngine(${i},'url',this.value)">
-<input value="${e.keyword||''}" placeholder="关键词" onchange="editEngine(${i},'keyword',this.value)">
+<input value="${esc(e.name)}" onchange="editEngine(${i},'name',this.value)">
+<input value="${esc(e.url)}" onchange="editEngine(${i},'url',this.value)">
+<input value="${esc(e.keyword||'')}" placeholder="关键词" onchange="editEngine(${i},'keyword',this.value)">
 <button onclick="deleteEngine(${i})">删除</button>
 </div>
 </div>`;
@@ -201,7 +215,7 @@ let i=engines.indexOf(e);
 
 menu.innerHTML+=`
 <div class="search-engine-item" onclick="changeEngine(${i})">
-${e.name}
+${esc(e.name)}
 </div>`;
 });
 }
@@ -274,12 +288,11 @@ if(!url.value.trim())return;
 
 let data={
  name:name.value.trim() || url.value.trim(),
- url:url.value.trim()
+ url:safeUrl(url.value.trim())
 };
 
 
-if(!data.url.startsWith("http"))
- data.url="https://"+data.url;
+if(data.url==="#")return;
 
 
 config.sites.push(data);
@@ -337,7 +350,7 @@ let a=document.createElement("a");
 
 a.className="shortcut";
 
-a.href=site.url;
+a.href=safeUrl(site.url);
 
 a.target="_blank";
 
@@ -350,17 +363,17 @@ let icon="";
 
 if(site.iconType==="emoji"){
 
-icon=`<span>${site.icon||"🌐"}</span>`;
+icon=`<span>${esc(site.icon||"🌐")}</span>`;
 
 }else if(site.iconType==="url"){
 
-icon=`<img src="${site.icon}">`;
+icon=`<img src="${esc(site.icon)}">`;
 
 }else{
 
 icon=
-`<img src="https://${host}/favicon.ico"
-onerror="faviconFallback(this,'${host}')">`;
+`<img src="https://${esc(host)}/favicon.ico"
+onerror="faviconFallback(this,'${esc(host)}')">`;
 
 }
 
@@ -370,7 +383,7 @@ a.innerHTML=`
 ${icon}
 </div>
 <div class="shortcut-title">
-${site.name}
+${esc(site.name)}
 </div>`;
 
 
@@ -527,14 +540,13 @@ if(!url.value.trim())return;
 
 let data={
 name:name.value.trim()||url.value,
-url:url.value.trim(),
+url:safeUrl(url.value.trim()),
 iconType:type.value,
 icon:icon.value.trim()
 };
 
 
-if(!data.url.startsWith("http"))
-data.url="https://"+data.url;
+if(data.url==="#")return;
 
 
 if(editIndex>=0){
@@ -579,16 +591,16 @@ box.innerHTML+=`
 <div class="card-sort-item" draggable="true" data-index="${i}">
 
 <div class="card-title">
-<span>${i+1}. ${s.name}</span>
+<span>${i+1}. ${esc(s.name)}</span>
 <span onclick="toggleCardDetail(${i})">⌄</span>
 </div>
 
 <div class="card-detail" id="card-detail-${i}">
 
-<input value="${s.name||""}"
+<input value="${esc(s.name||"")}"
 onchange="editCardValue(${i},'name',this.value)">
 
-<input value="${s.url||""}"
+<input value="${esc(s.url||"")}"
 onchange="editCardValue(${i},'url',this.value)">
 
 <select onchange="editCardValue(${i},'iconType',this.value)">
@@ -597,7 +609,7 @@ onchange="editCardValue(${i},'url',this.value)">
 <option value="emoji" ${s.iconType==="emoji"?"selected":""}>Emoji</option>
 </select>
 
-<input value="${s.icon||""}"
+<input value="${esc(s.icon||"")}"
 onchange="editCardValue(${i},'icon',this.value)">
 
 <button onclick="removeCard(${i})">
@@ -690,8 +702,10 @@ box.classList.contains("open")
 
 function editCardValue(i,key,value){
 
-if(key==="url"&&!value.startsWith("http"))
-value="https://"+value;
+if(key==="url"){
+value=safeUrl(value);
+if(value==="#")return;
+}
 
 config.sites[i][key]=value;
 
@@ -1003,7 +1017,7 @@ q=arr.slice(1).join(" ");
 if(q){
 
 location.href=
-engine.url+
+safeUrl(engine.url)+
 encodeURIComponent(q);
 
 }
@@ -1018,7 +1032,7 @@ if(q.startsWith("!")){
 q=q.slice(1).trim();
 
 location.href=
-config.search+
+safeUrl(config.search)+
 encodeURIComponent(q);
 
 return;
@@ -1027,7 +1041,7 @@ return;
 
 
 location.href=
-config.search+
+safeUrl(config.search)+
 encodeURIComponent(q);
 
 };
