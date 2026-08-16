@@ -243,29 +243,36 @@
   }
 
   // ============================================================
-  // dnd —— 通用拖拽排序
-  // 让 container 内带 [draggable][data-index] 的元素可拖拽换序：
+  // dnd —— 通用拖拽排序（事件委托版，参考建议 4.1）
+  // 只在容器上绑定一次事件，内部元素增删/重建都无需重新绑定监听器：
   //   getItems() 返回可变的源数组；drop 成功后调用 commit()（保存 + 重渲染）
   // ============================================================
-  function attachDragSort(container, getItems, commit) {
-    container.querySelectorAll("[draggable]").forEach(item => {
-      const to = Number(item.dataset.index);
-      item.addEventListener("dragstart", e => {
-        e.dataTransfer.setData("index", String(to));
-        item.classList.add("dragging");
-      });
-      item.addEventListener("dragend", () => item.classList.remove("dragging"));
-      item.addEventListener("dragover", e => e.preventDefault());
-      item.addEventListener("drop", e => {
-        e.preventDefault();
-        const from = Number(e.dataTransfer.getData("index"));
-        if (Number.isNaN(from) || from === to) return;
-        const items = getItems();
-        const moved = items.splice(from, 1)[0];
-        if (!moved) return;
-        items.splice(to, 0, moved);
-        commit();
-      });
+  function attachDelegatedDragSort(container, getItems, commit) {
+    container.addEventListener("dragstart", e => {
+      const item = e.target.closest("[draggable]");
+      if (!item) return;
+      e.dataTransfer.setData("index", item.dataset.index);
+      item.classList.add("dragging");
+    });
+    container.addEventListener("dragend", e => {
+      const item = e.target.closest("[draggable]");
+      if (item) item.classList.remove("dragging");
+    });
+    container.addEventListener("dragover", e => {
+      if (e.target.closest("[draggable]")) e.preventDefault(); // 允许放置
+    });
+    container.addEventListener("drop", e => {
+      const target = e.target.closest("[draggable]");
+      if (!target) return;
+      e.preventDefault();
+      const from = Number(e.dataTransfer.getData("index"));
+      const to = Number(target.dataset.index);
+      if (Number.isNaN(from) || from === to) return;
+      const items = getItems();
+      const moved = items.splice(from, 1)[0];
+      if (!moved) return;
+      items.splice(to, 0, moved);
+      commit();
     });
   }
 
@@ -316,10 +323,7 @@
     <button onclick="app.deleteEngine(${i})">${escapeHtml(t('delete'))}</button>
   </div>
 </div>`).join("");
-    attachDragSort(box, () => engines, () => {
-      store.setJSON("engines", engines);
-      renderEngines();
-    });
+    // 拖拽排序由 bindEvents 中的事件委托统一处理，这里不再逐项绑定
   }
 
   // 搜索框旁的引擎快捷切换菜单（当前引擎置顶）
@@ -334,11 +338,17 @@
     }).join("");
   }
 
+  // 仅当菜单打开时才重绘快捷菜单（关闭时跳过，避免无谓重绘，参考建议 4.2）
+  function refreshSearchMenu() {
+    const menu = $("search-engine-menu");
+    if (menu && menu.classList.contains("open")) renderSearchEngineMenu();
+  }
+
   // 刷新全部引擎相关视图（下拉框 + 管理列表 + 快捷菜单）
   function renderEngines() {
     syncEngineSelect();
     renderEngineList();
-    renderSearchEngineMenu();
+    refreshSearchMenu();
   }
 
   // 展开/收起列表项的编辑区（引擎与卡片共用，prefix 区分元素 id 前缀）
@@ -375,8 +385,8 @@
     config.search = engines[idx].url;
     store.setJSON("homepage", config);
     $("engine").value = idx;
-    renderSearchEngineMenu();
-    $("search-engine-menu").classList.remove("open"); // 选择后关闭菜单
+    refreshSearchMenu(); // 菜单此刻是打开的，刷新后再关闭
+    $("search-engine-menu").classList.remove("open");
   }
 
   // 检查快捷关键词是否重复（排除当前编辑项）
@@ -455,13 +465,8 @@
       link.innerHTML = `
 <div class="shortcut-icon">${siteIcon(site, host)}</div>
 <div class="shortcut-title">${escapeHtml(site.name)}</div>`;
-
-      // 右键菜单（编辑/删除）
-      link.oncontextmenu = e => {
-        e.preventDefault();
-        showCardMenu(i, e.clientX, e.clientY);
-      };
       box.appendChild(link);
+      // 拖拽排序与右键菜单由 bindEvents 中的事件委托统一处理，这里不再逐项绑定
     });
 
     // 末尾的"添加卡片"占位卡片
@@ -478,12 +483,6 @@
       $("card-editor").classList.add("open");
     };
     box.appendChild(addCard);
-
-    // 卡片网格拖拽排序
-    attachDragSort(box, () => config.sites, () => {
-      store.setJSON("homepage", config);
-      renderSites();
-    });
   }
 
   // 设置面板：导航卡片管理列表（可拖拽排序、内联编辑）
@@ -504,10 +503,37 @@
     <button onclick="app.removeCard(${i})">${escapeHtml(t('delete'))}</button>
   </div>
 </div>`).join("");
-    attachDragSort(box, () => config.sites, () => {
-      store.setJSON("homepage", config);
-      renderSites();
-    });
+    // 拖拽排序由 bindEvents 中的事件委托统一处理
+  }
+
+  // 只更新第 i 张卡片对应的 DOM（网格卡片 + 设置面板列表项），避免整页重绘（参考建议 4.1）
+  function syncSiteViews(i) {
+    const site = config.sites[i];
+    // 网格卡片
+    const cardEl = document.querySelector(`#sites a.shortcut[data-index="${i}"]`);
+    if (cardEl) {
+      cardEl.href = safeUrl(site.url);
+      const titleEl = cardEl.querySelector(".shortcut-title");
+      if (titleEl) titleEl.textContent = site.name;
+      let host = null;
+      try { host = new URL(site.url).hostname; } catch {}
+      if (host) {
+        const iconBox = cardEl.querySelector(".shortcut-icon");
+        if (iconBox) iconBox.innerHTML = siteIcon(site, host);
+      }
+    }
+    // 设置面板列表项
+    const item = document.getElementById("card-detail-" + i);
+    if (item) {
+      const title = item.closest(".card-sort-item").querySelector(".card-title span");
+      if (title) title.textContent = `${i + 1}. ${site.name}`;
+      const inputs = item.querySelectorAll("input");
+      if (inputs[0]) inputs[0].value = site.name || "";
+      if (inputs[1]) inputs[1].value = site.url || "";
+      if (inputs[2]) inputs[2].value = site.icon || "";
+      const sel = item.querySelector("select");
+      if (sel) sel.value = site.iconType || "auto";
+    }
   }
 
   // 右键弹出卡片操作菜单
@@ -561,10 +587,17 @@
       icon: iconEl.value.trim()
     };
     if (data.url === "#") return; // 非法 URL 拒绝保存
-    if (editIndex >= 0) config.sites[editIndex] = data;
-    else config.sites.push(data);
-    store.setJSON("homepage", config);
-    renderSites();
+    if (editIndex >= 0) {
+      // 编辑既有卡片：就地更新对应 DOM，避免整页重绘（参考建议 4.1）
+      config.sites[editIndex] = data;
+      store.setJSON("homepage", config);
+      syncSiteViews(editIndex);
+    } else {
+      // 新增卡片
+      config.sites.push(data);
+      store.setJSON("homepage", config);
+      renderSites();
+    }
     closeCardEditor();
   }
 
@@ -577,7 +610,7 @@
   // 展开/收起单个卡片编辑区
   function toggleCardDetail(i) { toggleDetail("card-detail", i); }
 
-  // 内联编辑卡片字段（url 字段做协议校验）
+  // 内联编辑卡片字段（url 字段做协议校验）；就地更新对应 DOM，不整页重绘
   function editCardValue(i, key, value) {
     if (key === "url") {
       value = safeUrl(value);
@@ -585,7 +618,7 @@
     }
     config.sites[i][key] = value;
     store.setJSON("homepage", config);
-    renderSites();
+    syncSiteViews(i);
   }
 
   // 添加新网站（表单提交）
@@ -687,6 +720,19 @@
       closeAllPopups();
     });
 
+    // 拖拽排序 + 卡片右键菜单：事件委托，只绑定一次（列表重建无需重新绑定）
+    const commitSites = () => { store.setJSON("homepage", config); renderSites(); };
+    const commitEngines = () => { store.setJSON("engines", engines); renderEngines(); };
+    attachDelegatedDragSort($("sites"), () => config.sites, commitSites);
+    attachDelegatedDragSort($("engine-list"), () => engines, commitEngines);
+    attachDelegatedDragSort($("editor"), () => config.sites, commitSites);
+    $("sites").addEventListener("contextmenu", e => {
+      const link = e.target.closest("a.shortcut");
+      if (!link) return;
+      e.preventDefault();
+      showCardMenu(Number(link.dataset.index), e.clientX, e.clientY);
+    });
+
     // 设置面板开关 + 同步各控件当前值
     $("settings").onclick = () => {
       const panel = $("panel");
@@ -719,15 +765,19 @@
       $("engine-form").classList.remove("show");
     };
 
-    // 搜索引擎下拉切换
+    // 搜索引擎下拉切换（菜单未打开时无需重绘）
     $("engine").addEventListener("change", e => {
       setEngineIndex(Number(e.target.value));
       syncEngineSelect();
-      renderSearchEngineMenu();
+      refreshSearchMenu();
     });
 
-    // 搜索框引擎切换按钮
-    $("search-engine-btn").onclick = () => $("search-engine-menu").classList.toggle("open");
+    // 搜索框引擎切换按钮：打开前先渲染，保证内容最新（参考建议 4.2）
+    $("search-engine-btn").onclick = () => {
+      const menu = $("search-engine-menu");
+      if (!menu.classList.contains("open")) renderSearchEngineMenu();
+      menu.classList.toggle("open");
+    };
 
     // 卡片编辑器
     $("save-card").onclick = saveCard;

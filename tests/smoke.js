@@ -55,7 +55,14 @@ function assert(cond, msg) {
   assert(document.getElementById("engine-list").querySelectorAll(".engine-sort-item").length === 5,
     "引擎管理列表渲染 5 条");
   const menu = document.getElementById("search-engine-menu");
-  assert(menu.querySelectorAll(".search-engine-item").length === 5, "快捷切换菜单 5 项");
+  assert(menu.querySelectorAll(".search-engine-item").length === 0,
+    "菜单未打开时不渲染（懒渲染）");
+  document.getElementById("search-engine-btn").click();
+  assert(menu.classList.contains("open") &&
+    menu.querySelectorAll(".search-engine-item").length === 5,
+    "点击按钮打开菜单时渲染 5 项");
+  menu.querySelector(".search-engine-item").click(); // 选择当前引擎
+  assert(!menu.classList.contains("open"), "选择引擎后菜单关闭");
   const saved = JSON.parse(window.localStorage.getItem("homepage"));
   assert(saved.search === "https://www.google.com/search?q=", "config.search 已同步并持久化");
 
@@ -68,7 +75,7 @@ function assert(cond, msg) {
   langSel.dispatchEvent(new window.Event("change"));
   assert(document.querySelector(".logo").textContent === "自定义起始页", "切回中文后标题恢复");
 
-  // ---- 拖拽排序（网格，走 attachDragSort）----
+  // ---- 拖拽排序（网格，走事件委托）----
   function dragEvent(type, fromIdx) {
     const ev = new window.Event(type, { bubbles: true, cancelable: true });
     ev.dataTransfer = {
@@ -146,6 +153,20 @@ function assert(cond, msg) {
   document.getElementById("settings").click();
   assert(document.getElementById("panel").style.display === "block", "设置面板打开");
   assert(document.getElementById("card-columns").value === "6", "面板同步列数控件");
+
+  // ---- 4.1 就地更新：内联编辑卡片字段只更新对应 DOM，不整页重绘 ----
+  const editNameInput = document.querySelector("#card-detail-0 input");
+  editNameInput.value = "就地改名";
+  editNameInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert(document.querySelector('#sites a.shortcut[data-index="0"] .shortcut-title').textContent === "就地改名",
+    "内联编辑名称后网格卡片就地更新");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).sites[0].name === "就地改名",
+    "就地更新已持久化");
+  const editUrlInput = document.querySelectorAll("#card-detail-0 input")[1];
+  editUrlInput.value = "https://inplace.example.com";
+  editUrlInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert(document.querySelector('#sites a.shortcut[data-index="0"]').href === "https://inplace.example.com/",
+    "内联编辑 URL 后网格卡片链接就地更新");
 
   // ================= 健壮性用例（参考建议 3.1–3.4） =================
 
