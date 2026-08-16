@@ -44,20 +44,27 @@
     return "#";
   }
 
-  // localStorage 封装：统一读写模式，JSON 自动序列化/反序列化
+  // localStorage 封装：统一读写模式 + 容错。
+  // 隐私模式/禁用存储时读写均不抛异常，回退默认值（参考建议 3.3）
   const store = {
     get(key, fallback) {
-      const v = localStorage.getItem(key);
-      return v === null ? fallback : v;
+      try {
+        const v = localStorage.getItem(key);
+        return v === null ? fallback : v;
+      } catch { return fallback; }
     },
-    set(key, value) { localStorage.setItem(key, value); },
+    set(key, value) {
+      try { localStorage.setItem(key, value); } catch {}
+    },
     getJSON(key) {
       try {
         const v = localStorage.getItem(key);
         return v ? JSON.parse(v) : null;
       } catch { return null; }
     },
-    setJSON(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+    setJSON(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
   };
 
   // ============================================================
@@ -81,7 +88,8 @@
       add_card: "添加卡片", edit_card: "编辑卡片", delete_card: "删除卡片", delete: "删除",
       keyword: "关键词",
       confirm_delete: "确定删除此卡片？", at_least_one: "至少保留一个搜索引擎",
-      keyword_dup: "关键词重复", import_fail: "导入失败"
+      keyword_dup: "关键词重复", engine_url_invalid: "搜索地址无效，需包含查询参数（如 ?q= 或 %s）",
+      import_fail: "导入失败"
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
@@ -100,7 +108,8 @@
       add_card: "Add Card", edit_card: "Edit Card", delete_card: "Delete Card", delete: "Delete",
       keyword: "Keyword",
       confirm_delete: "Delete this card?", at_least_one: "Keep at least one search engine",
-      keyword_dup: "Keyword already exists", import_fail: "Import failed"
+      keyword_dup: "Keyword already exists", engine_url_invalid: "Invalid search URL — must contain a query parameter (e.g. ?q= or %s)",
+      import_fail: "Import failed"
     }
   };
 
@@ -141,6 +150,84 @@
   ];
   let editIndex = -1;      // 正在编辑的卡片索引（-1 = 新增模式）
   const defaultLayout = { columns: 6, hide: false };  // 卡片布局默认值
+  const DEFAULT_SEARCH = "https://www.google.com/search?q=";  // 默认搜索地址
+
+  // ============================================================
+  // normalize —— 数据校验与归一化（参考建议 3.1 / 3.2）
+  // 任何来源（localStorage / config.json / 导入）的数据都经过这里：
+  // 逐字段校验类型、修正为合法值、缺失项补默认值，保证渲染永不因数据结构出错。
+  // ============================================================
+  const ICON_TYPES = ["auto", "url", "emoji"];
+
+  // 站点条目：修正字段类型；URL 非法则整条丢弃
+  function normalizeSite(s) {
+    if (!s || typeof s !== "object") return null;
+    const url = safeUrl(s.url);
+    if (url === "#") return null;
+    return {
+      name: typeof s.name === "string" ? s.name : "",
+      url,
+      iconType: ICON_TYPES.includes(s.iconType) ? s.iconType : "auto",
+      icon: typeof s.icon === "string" ? s.icon : ""
+    };
+  }
+
+  // 布局：columns 必须是 2–10 的整数，否则用默认值
+  function normalizeLayout(l) {
+    const out = { ...defaultLayout };
+    if (l && typeof l === "object") {
+      const cols = Number(l.columns);
+      if (Number.isInteger(cols) && cols >= 2 && cols <= 10) out.columns = cols;
+      out.hide = !!l.hide;
+    }
+    return out;
+  }
+
+  // 整体配置：sites 确保是数组、search 确保是合法搜索地址、layout 归一化
+  function normalizeConfig(data) {
+    const out = { search: DEFAULT_SEARCH, sites: [], layout: normalizeLayout() };
+    if (!data || typeof data !== "object" || Array.isArray(data)) return out;
+    if (typeof data.search === "string" && isValidEngineUrl(data.search)) out.search = data.search;
+    if (Array.isArray(data.sites)) out.sites = data.sites.map(normalizeSite).filter(s => s !== null);
+    out.layout = normalizeLayout(data.layout);
+    return out;
+  }
+
+  // 搜索引擎列表：仅保留结构合法的条目；整体非法返回 null（沿用默认列表）
+  function normalizeEngines(list) {
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    list.forEach(e => {
+      if (e && typeof e === "object" &&
+          typeof e.name === "string" && e.name.trim() &&
+          typeof e.url === "string") {
+        out.push({
+          name: e.name,
+          url: e.url,
+          keyword: typeof e.keyword === "string" ? e.keyword : ""
+        });
+      }
+    });
+    return out.length ? out : null;
+  }
+
+  // 搜索引擎地址是否可用：必须含 %s / {query} 占位符，或已是带查询参数的 URL
+  // （防止拼出 "https://example.com关键字" 这类无效搜索链接，参考建议 3.4）
+  function isValidEngineUrl(u) {
+    const url = safeUrl(u);
+    if (url === "#") return false;
+    return url.includes("%s") || url.includes("{query}") || (url.includes("?") && url.includes("="));
+  }
+
+  // 构造搜索链接：优先替换 %s / {query} 占位符；否则按“URL 已以查询参数结尾”直接追加
+  function buildSearchUrl(base, query) {
+    const url = safeUrl(base);
+    if (url === "#") return "#";
+    const q = encodeURIComponent(query);
+    if (url.includes("%s")) return url.replace(/%s/g, q);
+    if (url.includes("{query}")) return url.replace(/\{query\}/g, q);
+    return url + q;
+  }
 
   // ============================================================
   // theme —— 主题
@@ -265,8 +352,9 @@
 
   function toggleEngineDetail(i) { toggleDetail("engine-detail", i); }
 
-  // 编辑引擎字段（name/url/keyword）
+  // 编辑引擎字段（name/url/keyword）；url 需通过搜索地址校验
   function editEngine(i, key, value) {
+    if (key === "url" && !isValidEngineUrl(value)) { alert(t("engine_url_invalid")); return; }
     engines[i][key] = value.trim();
     store.setJSON("engines", engines);
     renderEngines();
@@ -305,6 +393,7 @@
     const keyEl = $("engine-keyword");
     const keyword = keyEl.value.trim().toLowerCase();
     if (!nameEl.value.trim() || !urlEl.value.trim()) return;
+    if (!isValidEngineUrl(urlEl.value)) { alert(t("engine_url_invalid")); return; }
     if (!keywordUnique(keyword)) { alert(t("keyword_dup")); return; }
     engines.push({ name: nameEl.value.trim(), url: urlEl.value.trim(), keyword });
     store.setJSON("engines", engines);
@@ -536,16 +625,16 @@
     a.click();
   }
 
-  // 从 JSON 文件导入配置（渲染时已有 esc/safeUrl 防护）
+  // 从 JSON 文件导入配置（渲染时已有 esc/safeUrl 防护；结构经 normalize 校验）
   function importData(file) {
     const reader = new FileReader();
     reader.onload = e => {
       try {
         const data = JSON.parse(e.target.result);
-        if (data.sites) config.sites = data.sites;
-        if (data.engines) engines = data.engines;
-        if (data.layout) config.layout = data.layout;
-        if (data.engineIndex !== undefined) store.set("engineIndex", data.engineIndex);
+        config = normalizeConfig(data);                  // sites/layout/search 逐字段校验
+        const importedEngines = normalizeEngines(data.engines);
+        if (importedEngines) engines = importedEngines;  // 引擎数据非法则保留现有
+        if (data.engineIndex !== undefined) store.set("engineIndex", Number(data.engineIndex) || 0);
         store.setJSON("homepage", config);
         store.setJSON("engines", engines);
         renderEngines();
@@ -690,33 +779,40 @@
       const engine = engines.find(eng => (eng.keyword || "").toLowerCase() === first);
       if (engine) {
         query = parts.slice(1).join(" ");
-        if (query) location.href = safeUrl(engine.url) + encodeURIComponent(query);
+        if (query) location.href = buildSearchUrl(engine.url, query);
         return;
       }
 
       // `!xxx` → 强制用当前引擎
       if (query.startsWith("!")) {
         query = query.slice(1).trim();
-        location.href = safeUrl(config.search) + encodeURIComponent(query);
+        location.href = buildSearchUrl(config.search, query);
         return;
       }
 
-      location.href = safeUrl(config.search) + encodeURIComponent(query);
+      location.href = buildSearchUrl(config.search, query);
     });
   }
 
   // ============================================================
   // boot —— 启动
   // ============================================================
+  // 读取 config.json；任何失败（404/网络/JSON 错误）都回退空对象，由 normalizeConfig 补默认值
+  async function fetchConfig() {
+    try {
+      const res = await fetch("config.json");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } catch { return {}; }
+  }
+
   async function load() {
     bindEvents();
     applyI18n();
     applyTheme();
-    config = store.getJSON("homepage") ||
-      await fetch("config.json").then(r => r.json())
-        .catch(() => ({ sites: [], layout: { ...defaultLayout } })); // 加载失败时用空配置兜底
-    if (!config.layout) config.layout = { ...defaultLayout };
-    const savedEngines = store.getJSON("engines");
+    // localStorage 数据损坏 → getJSON 返回 null → 回退 config.json → 再回退空配置
+    config = normalizeConfig(store.getJSON("homepage") || await fetchConfig());
+    const savedEngines = normalizeEngines(store.getJSON("engines"));
     if (savedEngines) engines = savedEngines;
     renderEngines();
     renderSites();

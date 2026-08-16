@@ -18,7 +18,7 @@ const { window } = dom;
 const { document } = window;
 
 // ---- 环境桩 ----
-window.fetch = async () => ({ json: async () => JSON.parse(configJson) });
+window.fetch = async () => ({ ok: true, json: async () => JSON.parse(configJson) });
 window.matchMedia = () => ({ matches: false });
 window.alert = () => {};
 window.confirm = () => true;
@@ -146,6 +146,67 @@ function assert(cond, msg) {
   document.getElementById("settings").click();
   assert(document.getElementById("panel").style.display === "block", "设置面板打开");
   assert(document.getElementById("card-columns").value === "6", "面板同步列数控件");
+
+  // ================= 健壮性用例（参考建议 3.1–3.4） =================
+
+  // ---- 3.4 添加无效搜索地址被拒绝 ----
+  let lastAlert = null;
+  window.alert = m => { lastAlert = m; };
+  document.getElementById("engine-name").value = "坏引擎";
+  document.getElementById("engine-url").value = "https://example.com"; // 无查询参数
+  document.getElementById("save-engine").click();
+  assert(lastAlert !== null, "无查询参数的搜索地址被拒绝并提示");
+  assert(JSON.parse(window.localStorage.getItem("engines")).length === 5, "拒绝后引擎列表未变化");
+  window.alert = () => {};
+
+  // ---- 3.2 导入结构损坏的数据被归一化 ----
+  const importInput = document.getElementById("import-data");
+  const badFile = new window.File([JSON.stringify({
+    sites: "not-an-array",                                   // 类型错误
+    layout: { columns: "abc", hide: true },                  // 非法列数
+    engines: [null, { name: "E1", url: "https://e1.com/search?q=" }], // 含非法条目
+    engineIndex: 0
+  })], "bad.json", { type: "application/json" });
+  Object.defineProperty(importInput, "files", { value: [badFile] });
+  importInput.dispatchEvent(new window.Event("change"));
+  await new Promise(r => setTimeout(r, 100));
+  const norm = JSON.parse(window.localStorage.getItem("homepage"));
+  assert(Array.isArray(norm.sites) && norm.sites.length === 0, "导入时 sites 非数组 → 归一化为空数组");
+  assert(norm.layout.columns === 6 && norm.layout.hide === true, "导入时非法列数 → 回退默认 6，hide 保留");
+  const impEngines = JSON.parse(window.localStorage.getItem("engines"));
+  assert(impEngines.length === 1 && impEngines[0].name === "E1", "导入引擎跳过非法条目，只保留合法项");
+
+  // ---- 3.1 localStorage 数据损坏 + config.json 加载失败 → 不崩溃，回退默认 ----
+  const dom2 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const w2 = dom2.window;
+  w2.matchMedia = () => ({ matches: false });
+  w2.alert = () => {};
+  w2.fetch = async () => { throw new Error("404"); };       // config.json 加载失败
+  w2.localStorage.setItem("homepage", "{corrupted json");   // 损坏数据
+  w2.localStorage.setItem("engines", "not-json");
+  w2.eval(appCode);
+  await new Promise(r => setTimeout(r, 100));
+  assert(w2.document.getElementById("sites").querySelectorAll("a.shortcut").length === 0,
+    "损坏数据 + config.json 失败 → 渲染空网格不崩溃");
+  assert(w2.document.getElementById("sites").querySelectorAll(".add-card").length === 1,
+    "空配置下仍有添加卡片占位");
+  assert(w2.document.getElementById("engine").options.length === 5,
+    "损坏的 engines → 回退默认 5 个引擎");
+
+  // ---- 3.3 localStorage 被禁用（隐私模式）→ 不崩溃 ----
+  const dom3 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const w3 = dom3.window;
+  w3.matchMedia = () => ({ matches: false });
+  w3.alert = () => {};
+  w3.fetch = window.fetch;
+  Object.defineProperty(w3, "localStorage", { get() { throw new Error("denied"); } });
+  let denied = false;
+  try { w3.eval(appCode); await new Promise(r => setTimeout(r, 100)); }
+  catch { denied = true; }
+  assert(!denied, "localStorage 禁用时不抛异常");
+  assert(w3.document.getElementById("sites").querySelectorAll("a.shortcut").length === 4,
+    "localStorage 禁用时仍从 config.json 渲染 4 张卡片");
+  assert(w3.document.getElementById("engine").options.length === 5, "localStorage 禁用时默认引擎可用");
 
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);
