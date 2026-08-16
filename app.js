@@ -341,20 +341,25 @@
   // ============================================================
   function attachDelegatedDragSort(container, getItems, commit) {
     container.addEventListener("dragstart", e => {
-      const item = e.target.closest("[draggable]");
+      const item = e.target.closest('[draggable="true"]'); // 编辑模式（draggable=false）不参与拖拽
       if (!item) return;
+      // 从输入控件发起拖拽会干扰文本选取与编辑，取消拖拽（双保险）
+      if (e.target.closest("input, select, button, textarea")) {
+        e.preventDefault();
+        return;
+      }
       e.dataTransfer.setData("index", item.dataset.index);
       item.classList.add("dragging");
     });
     container.addEventListener("dragend", e => {
-      const item = e.target.closest("[draggable]");
+      const item = e.target.closest('[draggable="true"]');
       if (item) item.classList.remove("dragging");
     });
     container.addEventListener("dragover", e => {
-      if (e.target.closest("[draggable]")) e.preventDefault(); // 允许放置
+      if (e.target.closest('[draggable="true"]')) e.preventDefault(); // 允许放置
     });
     container.addEventListener("drop", e => {
-      const target = e.target.closest("[draggable]");
+      const target = e.target.closest('[draggable="true"]');
       if (!target) return;
       e.preventDefault();
       const from = Number(e.dataTransfer.getData("index"));
@@ -402,9 +407,9 @@
     const box = $("engine-list");
     box.innerHTML = engines.map((e, i) => `
 <div class="engine-sort-item" draggable="true" data-index="${i}">
-  <div class="engine-title">
+  <div class="engine-title" onclick="app.toggleEngineDetail(${i})">
     <span>${i + 1}. ${escapeHtml(e.name)}</span>
-    <span onclick="app.toggleEngineDetail(${i})">⌄</span>
+    <span>⌄</span>
   </div>
   <div class="engine-detail" id="engine-detail-${i}">
     <input value="${escapeHtml(e.name)}" onchange="app.editEngine(${i},'name',this.value)">
@@ -434,6 +439,16 @@
     if (menu && menu.classList.contains("open")) renderSearchEngineMenu();
   }
 
+  // 打开/关闭引擎快捷切换菜单，并同步按钮箭头（⌃/⌄）
+  function setSearchMenuOpen(open) {
+    const menu = $("search-engine-menu");
+    if (!menu) return;
+    if (open && !menu.classList.contains("open")) renderSearchEngineMenu(); // 打开前先渲染
+    menu.classList.toggle("open", open);
+    const btn = $("search-engine-btn");
+    if (btn) btn.textContent = open ? "⌃" : "⌄";
+  }
+
   // 刷新全部引擎相关视图（下拉框 + 管理列表 + 快捷菜单）
   function renderEngines() {
     syncEngineSelect();
@@ -445,9 +460,13 @@
   function toggleDetail(prefix, i) {
     const box = $(prefix + "-" + i);
     if (!box) return;
-    box.classList.toggle("open");
+    const open = !box.classList.contains("open");
+    box.classList.toggle("open", open);
+    // 编辑模式（详情展开）下禁用该行拖拽，避免 draggable 干扰输入框文字选取
+    const item = box.closest("[draggable]");
+    if (item) item.draggable = !open;
     const arrow = box.previousElementSibling.querySelector("span:last-child");
-    arrow.textContent = box.classList.contains("open") ? "⌃" : "⌄";
+    arrow.textContent = open ? "⌃" : "⌄";
   }
 
   function toggleEngineDetail(i) { toggleDetail("engine-detail", i); }
@@ -474,8 +493,7 @@
   function changeEngine(i) {
     const idx = setEngineIndex(i);  // 同时持久化 engineIndex
     $("engine").value = idx;
-    refreshSearchMenu(); // 菜单此刻是打开的，刷新后再关闭
-    $("search-engine-menu").classList.remove("open");
+    setSearchMenuOpen(false); // 选择后关闭菜单并复位箭头
   }
 
   // 检查快捷关键词是否重复（排除 excludeIndex 对应的引擎；-1 = 全部检查）
@@ -581,9 +599,9 @@
     if (!box || !Array.isArray(config.sites)) return;  // 防御：数据未就绪时安全返回
     box.innerHTML = config.sites.map((site, i) => `
 <div class="card-sort-item" draggable="true" data-index="${i}">
-  <div class="card-title">
+  <div class="card-title" onclick="app.toggleCardDetail(${i})">
     <span>${i + 1}. ${escapeHtml(site.name)}</span>
-    <span onclick="app.toggleCardDetail(${i})">⌄</span>
+    <span>⌄</span>
   </div>
   <div class="card-detail" id="card-detail-${i}">
     <input value="${escapeHtml(site.name || "")}" onchange="app.editCardValue(${i},'name',this.value)">
@@ -795,8 +813,7 @@
   function closeAllPopups() {
     const panel = $("panel");
     if (panel) panel.style.display = "none";
-    const engineMenu = $("search-engine-menu");
-    if (engineMenu) engineMenu.classList.remove("open");
+    setSearchMenuOpen(false); // 关闭引擎菜单并复位按钮箭头
     const cardEditor = $("card-editor");
     if (cardEditor) cardEditor.classList.remove("open");
     const cardMenu = $("card-menu");
@@ -864,6 +881,18 @@
       $("engine-form").classList.remove("show");
     };
 
+    // 原生下拉箭头随展开/关闭翻转（事件委托到 document，覆盖动态渲染的卡片图标选择框）：
+    // focusin/mousedown = 展开（箭头朝上）；change（选中）/focusout（失焦）/Escape = 关闭（箭头朝下）
+    const ARROW_SELECT = "#panel select, #card-editor select";
+    const isArrowSelect = e => !!(e.target && e.target.matches && e.target.matches(ARROW_SELECT));
+    document.addEventListener("focusin", e => { if (isArrowSelect(e)) e.target.classList.add("open"); });
+    document.addEventListener("mousedown", e => { if (isArrowSelect(e)) e.target.classList.add("open"); });
+    document.addEventListener("change", e => { if (isArrowSelect(e)) e.target.classList.remove("open"); });
+    document.addEventListener("focusout", e => { if (isArrowSelect(e)) e.target.classList.remove("open"); });
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && isArrowSelect(e)) e.target.classList.remove("open");
+    });
+
     // 搜索引擎下拉切换（菜单未打开时无需重绘）
     $("engine").addEventListener("change", e => {
       setEngineIndex(Number(e.target.value));
@@ -871,11 +900,10 @@
       refreshSearchMenu();
     });
 
-    // 搜索框引擎切换按钮：打开前先渲染，保证内容最新（参考建议 4.2）
+    // 搜索框引擎切换按钮：打开前先渲染并翻转箭头，保证内容与状态同步
     $("search-engine-btn").onclick = () => {
       const menu = $("search-engine-menu");
-      if (!menu.classList.contains("open")) renderSearchEngineMenu();
-      menu.classList.toggle("open");
+      setSearchMenuOpen(!menu.classList.contains("open"));
     };
 
     // 卡片编辑器

@@ -312,6 +312,17 @@ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/sv
 border-color:#0060df;
 }
 
+/* 原生下拉"展开中"（JS 切换 open 类）时箭头朝上，关闭时恢复朝下 */
+#panel select.open,
+#card-editor select.open{
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 8l4-4 4 4' fill='none' stroke='%235b5b66' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+body.dark #panel select.open,
+body.dark #card-editor select.open{
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 8l4-4 4 4' fill='none' stroke='%23cfcfd8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
 #panel button{
 height:36px;
 padding:0 14px;
@@ -421,6 +432,7 @@ align-items:center;
 padding:8px;
 border-radius:8px;
 font-size:14px;
+cursor:pointer; /* 整行可点击，展开/收起详情 */
 }
 
 .engine-title:hover{
@@ -576,6 +588,7 @@ align-items:center;
 padding:8px;
 border-radius:8px;
 font-size:14px;
+cursor:pointer; /* 整行可点击，展开/收起详情 */
 }
 
 .card-title:hover{

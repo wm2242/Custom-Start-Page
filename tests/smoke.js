@@ -61,8 +61,18 @@ function assert(cond, msg) {
   assert(menu.classList.contains("open") &&
     menu.querySelectorAll(".search-engine-item").length === 5,
     "点击按钮打开菜单时渲染 5 项");
+  assert(document.getElementById("search-engine-btn").textContent === "⌃",
+    "菜单打开后按钮箭头变为 ⌃");
   menu.querySelector(".search-engine-item").click(); // 选择当前引擎
   assert(!menu.classList.contains("open"), "选择引擎后菜单关闭");
+  assert(document.getElementById("search-engine-btn").textContent === "⌄",
+    "菜单关闭后按钮箭头恢复 ⌄");
+  document.getElementById("search-engine-btn").click();
+  assert(menu.classList.contains("open"), "再次打开菜单");
+  document.body.click(); // 点击页面空白处
+  assert(!menu.classList.contains("open") &&
+    document.getElementById("search-engine-btn").textContent === "⌄",
+    "点击空白处关闭菜单并复位箭头");
   const saved = JSON.parse(window.localStorage.getItem("homepage"));
   assert(saved.search === undefined, "search 不再单独存储（由 engines+engineIndex 派生）");
   assert(saved.engines[saved.engineIndex].url === "https://www.google.com/search?q=",
@@ -182,6 +192,31 @@ function assert(cond, msg) {
   assert(document.body.classList.contains("dark"), "暗色主题已生效");
   themeSel.value = "system";
   themeSel.dispatchEvent(new window.Event("change"));
+
+  // ---- 12.x 原生下拉箭头随展开/关闭翻转（open 类切换，事件委托）----
+  themeSel.dispatchEvent(new window.Event("focusin", { bubbles: true }));
+  assert(themeSel.classList.contains("open"), "获得焦点（下拉展开）时箭头朝上");
+  themeSel.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert(!themeSel.classList.contains("open"), "选择选项（下拉关闭）后箭头恢复朝下");
+  themeSel.dispatchEvent(new window.Event("focusin", { bubbles: true }));
+  themeSel.dispatchEvent(new window.Event("mousedown", { bubbles: true }));
+  assert(themeSel.classList.contains("open"), "再次点击展开时箭头朝上");
+  themeSel.dispatchEvent(new window.Event("focusout", { bubbles: true }));
+  assert(!themeSel.classList.contains("open"), "点击别处（失焦）后箭头恢复朝下");
+  themeSel.dispatchEvent(new window.Event("focusin", { bubbles: true }));
+  themeSel.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert(!themeSel.classList.contains("open"), "按 Esc 关闭后箭头恢复朝下");
+
+  // ---- 12.x 动态渲染的卡片图标选择框同样响应展开/关闭 ----
+  const iconSel = document.querySelector("#card-detail-0 select");
+  assert(iconSel !== null, "卡片详情内的图标选择框已渲染");
+  iconSel.dispatchEvent(new window.Event("focusin", { bubbles: true }));
+  assert(iconSel.classList.contains("open"), "图标选择框展开时箭头朝上");
+  iconSel.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert(!iconSel.classList.contains("open"), "图标选择框选中后箭头恢复朝下");
+  iconSel.dispatchEvent(new window.Event("focusin", { bubbles: true }));
+  iconSel.dispatchEvent(new window.Event("focusout", { bubbles: true }));
+  assert(!iconSel.classList.contains("open"), "图标选择框失焦后箭头恢复朝下");
 
   // ================= 健壮性用例（参考建议 3.1–3.4） =================
 
@@ -357,6 +392,78 @@ function assert(cond, msg) {
   assert(st5.engineIndex === 0, "索引越界自动回退到 0");
   assert(st5.search === undefined, "无失效的 search 引用（搜索地址由 engines[0] 派生）");
   assert(engineSel5.value === "0", "下拉框同步回退到第 1 个引擎");
+
+  // ---- 9.1 导出包含全部设置（搜索/语言/主题/卡片布局/引擎/站点）----
+  w5.document.getElementById("theme-mode").value = "dark";
+  w5.document.getElementById("theme-mode").dispatchEvent(new w5.Event("change"));
+  w5.document.getElementById("lang-mode").value = "en";
+  w5.document.getElementById("lang-mode").dispatchEvent(new w5.Event("change"));
+  engineSel5.value = "2";
+  engineSel5.dispatchEvent(new w5.Event("change"));
+  let blob5 = null;
+  const origC5 = w5.URL.createObjectURL;
+  w5.URL.createObjectURL = b => { blob5 = b; return "blob:t"; };
+  const origClick5 = w5.HTMLAnchorElement.prototype.click;
+  w5.HTMLAnchorElement.prototype.click = function () {};
+  w5.document.getElementById("export-data").click();
+  w5.URL.createObjectURL = origC5;
+  w5.HTMLAnchorElement.prototype.click = origClick5;
+  const exp5 = JSON.parse(await blob5.text());
+  assert(exp5.theme === "dark" && exp5.lang === "en", "导出包含主题与语言设置");
+  assert(exp5.engineIndex === 2, "导出包含当前搜索引擎索引（搜索设置）");
+  assert(exp5.layout && typeof exp5.layout.columns === "number" &&
+    typeof exp5.layout.hide === "boolean", "导出包含卡片布局设置（列数/隐藏）");
+  assert(Array.isArray(exp5.engines) && exp5.engines.length === 4, "导出包含引擎管理数据");
+  assert(Array.isArray(exp5.sites), "导出包含卡片管理数据");
+
+  // ---- 9.2 从输入控件发起拖拽不会触发排序拖拽（不干扰文本选取/编辑）----
+  const detailInput = w5.document.querySelector("#engine-list .engine-detail input");
+  const dragFromInput = new w5.Event("dragstart", { bubbles: true, cancelable: true });
+  dragFromInput.dataTransfer = { setData() {}, getData() { return ""; } };
+  detailInput.dispatchEvent(dragFromInput);
+  assert(!detailInput.closest(".engine-sort-item").classList.contains("dragging"),
+    "从输入框拖拽不触发排序（无 dragging 标记）");
+  const dragFromTitle = new w5.Event("dragstart", { bubbles: true, cancelable: true });
+  dragFromTitle.dataTransfer = { _d: {}, setData(k, v) { this._d[k] = v; }, getData(k) { return this._d[k]; } };
+  const engTitle = w5.document.querySelector(".engine-title");
+  engTitle.dispatchEvent(dragFromTitle);
+  assert(engTitle.closest(".engine-sort-item").classList.contains("dragging") &&
+    dragFromTitle.dataTransfer._d.index !== undefined,
+    "从标题栏拖拽正常触发排序");
+  engTitle.closest(".engine-sort-item").classList.remove("dragging"); // 清理标记，避免影响后续用例
+
+  // ---- 9.3 点击整行标题即可展开/收起详情 ----
+  const detailBox = w5.document.getElementById("engine-detail-0");
+  assert(!detailBox.classList.contains("open"), "初始详情为收起状态");
+  w5.document.querySelector(".engine-title").click();
+  assert(detailBox.classList.contains("open"), "点击标题行展开详情");
+  assert(w5.document.querySelector(".engine-title span:last-child").textContent === "⌃",
+    "展开后箭头变为 ⌃");
+  w5.document.querySelector(".engine-title").click();
+  assert(!detailBox.classList.contains("open"), "再次点击标题行收起详情");
+  assert(w5.document.querySelector(".engine-title span:last-child").textContent === "⌄",
+    "收起后箭头恢复 ⌄");
+  const cardDetail = w5.document.getElementById("card-detail-0");
+  assert(!cardDetail.classList.contains("open"), "卡片详情初始收起");
+  w5.document.querySelector(".card-title").click();
+  assert(cardDetail.classList.contains("open"), "点击卡片标题行展开详情");
+
+  // ---- 9.4 编辑模式（详情展开）下该行禁用拖拽 ----
+  const sortItem0 = w5.document.querySelector("#engine-list .engine-sort-item");
+  assert(sortItem0.draggable === true, "收起状态下该行可拖拽");
+  w5.document.querySelector("#engine-list .engine-title").click(); // 展开第 1 项
+  assert(sortItem0.draggable === false, "编辑模式（详情展开）下该行禁用拖拽");
+  const dragInEdit = new w5.Event("dragstart", { bubbles: true, cancelable: true });
+  dragInEdit.dataTransfer = { _d: {}, setData(k, v) { this._d[k] = v; }, getData(k) { return this._d[k]; } };
+  sortItem0.dispatchEvent(dragInEdit);
+  assert(!sortItem0.classList.contains("dragging") && dragInEdit.dataTransfer._d.index === undefined,
+    "编辑模式下拖拽被忽略（不触发排序）");
+  w5.document.querySelector("#engine-list .engine-title").click(); // 收起
+  assert(sortItem0.draggable === true, "收起后恢复可拖拽");
+  const dragAfterClose = new w5.Event("dragstart", { bubbles: true, cancelable: true });
+  dragAfterClose.dataTransfer = { _d: {}, setData(k, v) { this._d[k] = v; }, getData(k) { return this._d[k]; } };
+  sortItem0.dispatchEvent(dragAfterClose);
+  assert(dragAfterClose.dataTransfer._d.index !== undefined, "收起后拖拽排序恢复正常");
 
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);
