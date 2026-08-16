@@ -85,7 +85,7 @@
       card_manage: "导航卡片管理", add_site: "添加网站",
       site_name: "网站名称", site_url: "网站地址",
       theme_settings: "主题设置", theme_system: "跟随系统", theme_light: "浅色", theme_dark: "深色",
-      theme_colors: "自定义配色", color_bg: "背景色", color_card: "卡片色", color_text: "文字色",
+      theme_custom: "自定义配色", color_bg: "背景色", color_card: "卡片色", color_text: "文字色",
       color_secondary: "次要文字色", color_border: "边框色", color_reset: "恢复默认",
       card_display: "卡片显示", columns: "每行卡片数量", hide_cards: "隐藏所有卡片",
       data_manage: "数据管理", export_data: "导出数据", import_data: "导入数据",
@@ -108,7 +108,7 @@
       card_manage: "Shortcut Management", add_site: "Add Site",
       site_name: "Site Name", site_url: "Site URL",
       theme_settings: "Theme Settings", theme_system: "System", theme_light: "Light", theme_dark: "Dark",
-      theme_colors: "Custom Colors", color_bg: "Background", color_card: "Card", color_text: "Text",
+      theme_custom: "Custom Colors", color_bg: "Background", color_card: "Card", color_text: "Text",
       color_secondary: "Secondary Text", color_border: "Border", color_reset: "Reset",
       card_display: "Card Display", columns: "Cards per Row", hide_cards: "Hide All Cards",
       data_manage: "Data Management", export_data: "Export Data", import_data: "Import Data",
@@ -234,7 +234,7 @@
     if (eng) out.engines = eng;
     const idx = Number(data.engineIndex);
     if (Number.isInteger(idx) && idx >= 0 && idx < out.engines.length) out.engineIndex = idx;
-    if (["system", "light", "dark"].includes(data.theme)) out.theme = data.theme;
+    if (["system", "light", "dark", "custom"].includes(data.theme)) out.theme = data.theme;
     if (["system", "zh", "en"].includes(data.lang)) out.lang = data.lang;
     out.colors = normalizeColors(data.colors);
     return out;
@@ -356,15 +356,21 @@
     }
   }
 
-  // 应用自定义配色：把颜色写到 body 的内联 CSS 变量（内联优先级最高，
-  // 同时覆盖亮/暗两套主题；colors 为 null 时移除，恢复主题默认色）
+  // 应用自定义配色：仅当主题模式为"custom"时生效（内联 CSS 变量优先级最高，
+  // 同时覆盖亮/暗两套主题变量）；否则移除内联覆盖，恢复主题默认色
   function applyColors() {
     const root = document.body;
-    if (!colors) {
+    if (theme !== "custom" || !colors) {
       COLOR_KEYS.forEach(k => root.style.removeProperty("--" + k));
       return;
     }
     COLOR_KEYS.forEach(k => root.style.setProperty("--" + k, colors[k]));
+  }
+
+  // 主题模式为"自定义配色"时显示配色配置面板，否则隐藏
+  function syncColorPanel() {
+    const colorForm = $("color-form");
+    if (colorForm) colorForm.classList.toggle("show", theme === "custom");
   }
 
   // ============================================================
@@ -818,8 +824,13 @@
           alert(t("import_version"));
           return;
         }
-        applyState(normalizeState(data));  // 站点/布局/引擎/索引/主题/语言整体归一化导入
+        applyState(normalizeState(data));  // 站点/布局/引擎/索引/主题/语言/配色整体归一化导入
         saveState();
+        // 导入的主题/语言/配色立即生效（无需刷新页面）
+        applyI18n();
+        applyTheme();
+        applyColors();
+        syncColorPanel();
         renderEngines();
         renderSites();
       } catch (e) { alert(t("import_fail")); }
@@ -893,6 +904,7 @@
         $("card-columns").value = config.layout.columns || 6;
         $("hide-cards").checked = !!config.layout.hide;
         syncColorInputs();
+        syncColorPanel();
         renderEngineList();
         renderEditor();
       } else {
@@ -965,14 +977,17 @@
     $("card-columns").addEventListener("change", updateLayout);
     $("hide-cards").addEventListener("change", updateLayout);
 
-    // 主题切换
+    // 主题切换：选"自定义配色"时显示配色配置面板，其余模式隐藏；
+    // 配色仅在 custom 模式应用（见 applyColors）
     $("theme-mode").addEventListener("change", function () {
       theme = this.value;
       saveState();
       applyTheme();
+      applyColors();
+      syncColorPanel();
     });
 
-    // ---------- 自定义配色（按钮展开；保存 / 取消 / 恢复默认）----------
+    // ---------- 自定义配色（面板内：预览 / 保存 / 取消 / 恢复默认）----------
     // 从 5 个颜色输入框收集当前值（不持久化）
     function collectColorValues() {
       const obj = {};
@@ -999,25 +1014,22 @@
       el.addEventListener("input", previewColors);  // 取色过程实时预览
       el.addEventListener("change", previewColors); // 取色器确认后仍先预览
     });
-    // 展开/收起配色表单（与"添加网站/添加搜索引擎"交互一致）
-    $("show-color-form").onclick = () => $("color-form").classList.toggle("show");
+    // 配色配置面板的显示由主题模式（custom）控制（见 syncColorPanel），
+    // 面板内三个按钮只处理颜色本身
     $("color-save").onclick = () => {
       colors = collectColorValues();  // 保存：提交为正式配色并持久化
       saveState();
       applyColors();
-      $("color-form").classList.remove("show");
     };
     $("color-cancel").onclick = () => {
       applyColors();      // 取消：撤销预览，恢复已保存配色（无则用主题默认）
       syncColorInputs();
-      $("color-form").classList.remove("show");
     };
     $("color-reset").onclick = () => {
       colors = null;      // 恢复默认：清除配色并持久化
       saveState();
       applyColors();
       syncColorInputs();
-      $("color-form").classList.remove("show");
     };
 
     // 语言切换（立即重渲染）
@@ -1077,6 +1089,7 @@
     applyI18n();  // 需在 applyState 之后：语言取自已加载的状态
     applyTheme(); // 需在 applyState 之后：主题取自已加载的状态
     applyColors();// 自定义配色取自已加载的状态
+    syncColorPanel(); // 主题为 custom 时显示配色配置面板
     renderEngines();
     renderSites();
   }

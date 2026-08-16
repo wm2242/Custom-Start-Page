@@ -466,15 +466,15 @@ function assert(cond, msg) {
   sortItem0.dispatchEvent(dragAfterClose);
   assert(dragAfterClose.dataTransfer._d.index !== undefined, "收起后拖拽排序恢复正常");
 
-  // ---- 14.x 自定义配色（按钮展开表单 + 保存/取消/恢复默认，与添加网站/引擎一致）----
+  // ---- 14.x 自定义配色（主题选择框选"自定义配色"后出现配置面板）----
   const colorForm = w5.document.getElementById("color-form");
-  assert(!colorForm.classList.contains("show"), "配色表单初始收起");
-  w5.document.getElementById("show-color-form").click();
-  assert(colorForm.classList.contains("show"), "点击按钮展开配色表单");
-  w5.document.getElementById("show-color-form").click();
-  assert(!colorForm.classList.contains("show"), "再次点击按钮收起表单");
-  w5.document.getElementById("show-color-form").click();
-  assert(colorForm.classList.contains("show"), "重新展开配色表单");
+  const themeModeSel5 = w5.document.getElementById("theme-mode");
+  assert(!colorForm.classList.contains("show"), "主题非 custom 时配置面板隐藏");
+  themeModeSel5.value = "custom";
+  themeModeSel5.dispatchEvent(new w5.Event("change"));
+  assert(colorForm.classList.contains("show"), "选中自定义配色后出现配置面板");
+  assert(JSON.parse(w5.localStorage.getItem("homepage")).theme === "custom",
+    "主题模式 custom 已持久化");
 
   // 调整颜色 → 仅实时预览，不持久化
   w5.document.getElementById("color-bg").value = "#112233";
@@ -488,16 +488,15 @@ function assert(cond, msg) {
   assert(JSON.parse(w5.localStorage.getItem("homepage")).colors === null,
     "未点保存前不持久化");
 
-  // 保存 → 持久化 + 表单收起
+  // 保存 → 持久化（custom 模式下配置面板保持打开）
   w5.document.getElementById("color-save").click();
   const colState = JSON.parse(w5.localStorage.getItem("homepage")).colors;
   assert(colState && colState.bg === "#112233" && colState.card === "#445566" &&
     colState.text === "#aabbcc" && colState.secondary === "#ddeeff" && colState.border === "#010203",
     "保存后 5 个配色持久化到统一存储");
-  assert(!colorForm.classList.contains("show"), "保存后表单收起");
+  assert(colorForm.classList.contains("show"), "custom 模式下保存后配置面板保持打开");
 
-  // 再改颜色（预览）→ 取消 → 恢复已保存值 + 表单收起
-  w5.document.getElementById("show-color-form").click();
+  // 再改颜色（预览）→ 取消 → 恢复已保存值
   w5.document.getElementById("color-bg").value = "#fedcba";
   w5.document.getElementById("color-bg").dispatchEvent(new w5.Event("input", { bubbles: true }));
   assert(w5.document.body.style.getPropertyValue("--bg").trim() === "#fedcba",
@@ -507,16 +506,19 @@ function assert(cond, msg) {
     "取消后撤销预览，恢复已保存配色");
   assert(w5.document.getElementById("color-bg").value === "#112233",
     "取消后颜色控件同步回已保存值");
-  assert(!colorForm.classList.contains("show"), "取消后表单收起");
 
-  // 恢复默认：colors 置 null 并移除内联变量 + 表单收起
-  w5.document.getElementById("show-color-form").click();
+  // 恢复默认：colors 置 null 并移除内联变量
   w5.document.getElementById("color-reset").click();
   const afterReset = JSON.parse(w5.localStorage.getItem("homepage"));
   assert(afterReset.colors === null, "恢复默认后 colors 为 null");
   assert(w5.document.body.style.getPropertyValue("--bg").trim() === "",
     "恢复默认后内联变量被移除");
-  assert(!colorForm.classList.contains("show"), "恢复默认后表单收起");
+
+  // 切回浅色 → 配置面板隐藏，自定义配色不再应用
+  themeModeSel5.value = "light";
+  themeModeSel5.dispatchEvent(new w5.Event("change"));
+  assert(!colorForm.classList.contains("show"), "切回普通主题后配置面板隐藏");
+  assert(w5.document.body.classList.contains("dark") === false, "浅色主题正常应用");
 
   // 导入非法配色 → 归一化为 null
   const badColorFile = new w5.File([JSON.stringify({
@@ -528,6 +530,25 @@ function assert(cond, msg) {
   await new Promise(r => setTimeout(r, 80));
   const afterBadColor = JSON.parse(w5.localStorage.getItem("homepage"));
   assert(afterBadColor.colors === null, "含非法色值的配色数据被归一化为 null");
+
+  // ---- 15.x 导入后主题/语言/配色立即生效（无需刷新）----
+  const importApplyFile = new w5.File([JSON.stringify({
+    version: 2,
+    sites: [], engines: [],
+    layout: { columns: 6, hide: false },
+    theme: "custom", lang: "en",
+    colors: { bg: "#010101", card: "#020202", text: "#030303", secondary: "#040404", border: "#050505" }
+  })], "apply.json", { type: "application/json" });
+  Object.defineProperty(w5.document.getElementById("import-data"), "files",
+    { value: [importApplyFile], configurable: true });
+  w5.document.getElementById("import-data").dispatchEvent(new w5.Event("change"));
+  await new Promise(r => setTimeout(r, 80));
+  assert(w5.document.body.style.getPropertyValue("--bg").trim() === "#010101",
+    "导入后配色立即应用（body 变量）");
+  assert(w5.document.querySelector(".logo").textContent === "Custom Start Page",
+    "导入后语言立即生效");
+  assert(w5.document.getElementById("color-form").classList.contains("show"),
+    "导入 custom 主题后配置面板出现");
 
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);
