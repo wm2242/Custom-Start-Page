@@ -89,10 +89,14 @@ function getToastText(win) {
     "当前搜索引擎在菜单中有明显选中状态");
   assert(document.getElementById("search-engine-btn").textContent === "⌃",
     "菜单打开后按钮箭头变为 ⌃");
+  assert(document.getElementById("search-engine-btn").getAttribute("aria-expanded") === "true",
+    "菜单打开后 aria-expanded=true");
   menu.querySelector(".search-engine-item").click(); // 选择当前引擎
   assert(!menu.classList.contains("open"), "选择引擎后菜单关闭");
   assert(document.getElementById("search-engine-btn").textContent === "⌄",
     "菜单关闭后按钮箭头恢复 ⌄");
+  assert(document.getElementById("search-engine-btn").getAttribute("aria-expanded") === "false",
+    "菜单关闭后 aria-expanded=false");
   document.getElementById("search-engine-btn").click();
   assert(menu.classList.contains("open"), "再次打开菜单");
   document.body.click(); // 点击页面空白处
@@ -552,6 +556,15 @@ function getToastText(win) {
   wSearch.document.getElementById("engine").dispatchEvent(new wSearch.Event("change"));
   assert(submitSearch("!bing") === "https://www.bing.com/search?q=bing",
     "! 强制使用当前引擎（Bing）");
+
+  // 切换引擎后重新打开菜单，选中态应同步到新引擎
+  wSearch.document.getElementById("search-engine-btn").click();
+  wSearch.document.querySelector('.search-engine-item[data-index="1"]').click();
+  wSearch.document.getElementById("search-engine-btn").click();
+  assert(wSearch.document.querySelector(".search-engine-item.active") &&
+    wSearch.document.querySelector(".search-engine-item.active").dataset.index === "1",
+    "切换引擎后重新打开菜单，active 选中态立即更新");
+  wSearch.document.body.click();
 
   // ---- 9.1 导出包含全部设置（搜索/语言/主题/卡片布局/引擎/站点）----
   w5.document.getElementById("theme-mode").value = "dark";
