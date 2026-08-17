@@ -134,9 +134,9 @@
       add_card: "添加卡片", edit_card: "编辑卡片", delete_card: "删除卡片", delete: "删除",
       keyword: "关键词",
       confirm_delete: "确定删除此卡片？", at_least_one: "至少保留一个搜索引擎",
-      keyword_dup: "关键词重复", engine_url_invalid: "搜索地址无效，需包含 %s 或 {query} 占位符",
+      keyword_dup: "关键词重复", engine_name_empty: "搜索引擎名称不能为空", engine_url_invalid: "搜索地址无效，需包含 %s 或 {query} 占位符",
       import_fail: "导入失败", import_too_large: "备份文件过大（超过 {n} MB）",
-      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功", save_failed: "保存失败：浏览器存储不可用"
+      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功", save_failed: "保存失败：本次更改未写入存储，请检查浏览器设置后重试"
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
@@ -157,9 +157,9 @@
       add_card: "Add Card", edit_card: "Edit Card", delete_card: "Delete Card", delete: "Delete",
       keyword: "Keyword",
       confirm_delete: "Delete this card?", at_least_one: "Keep at least one search engine",
-      keyword_dup: "Keyword already exists", engine_url_invalid: "Invalid search URL — must contain a %s or {query} placeholder",
+      keyword_dup: "Keyword already exists", engine_name_empty: "Search engine name cannot be empty", engine_url_invalid: "Invalid search URL — must contain a %s or {query} placeholder",
       import_fail: "Import failed", import_too_large: "Backup file too large (over {n} MB)",
-      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported", save_failed: "Save failed: browser storage unavailable"
+      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported", save_failed: "Save failed: changes were not written. Please check browser storage settings and retry."
     }
   };
 
@@ -370,21 +370,23 @@
   // 写入前统一截断/限量：运行时的新增/编辑同样受 MAX_* 约束，
   // 避免"保存时不限制、刷新后才被归一化截断"的不一致（load/import 已由 normalize 处理）
   function sanitizeState() {
-    if (Array.isArray(config.sites)) {
-      config.sites = config.sites.slice(0, MAX_SITES)
-        .map(normalizeSite).filter(s => s !== null);
-    }
-    if (Array.isArray(engines)) {
-      engines = engines.slice(0, MAX_ENGINES).map(e => {
-        if (!e || typeof e !== "object") return null;
-        return {
-          name: typeof e.name === "string" ? e.name.slice(0, MAX_NAME_LENGTH) : "",
-          url: typeof e.url === "string" ? e.url.slice(0, MAX_URL_LENGTH) : "",
-          keyword: typeof e.keyword === "string" ? e.keyword.slice(0, MAX_KEYWORD_LENGTH) : ""
-        };
-      }).filter(e => e && e.name.trim() && e.url);
-      engineIndex = Math.min(engineIndex, Math.max(0, engines.length - 1));
-    }
+    // 复用 normalizeState，避免与导入/启动时的校验逻辑重复维护
+    const data = normalizeState({
+      sites: config.sites,
+      layout: config.layout,
+      engines,
+      engineIndex,
+      theme,
+      lang,
+      colors
+    });
+    config.sites = data.sites;
+    config.layout = data.layout;
+    engines = data.engines;
+    engineIndex = data.engineIndex;
+    theme = data.theme;
+    lang = data.lang;
+    colors = data.colors;
   }
 
   // 把内存状态整体写入单一 key；顺带清理迁移前遗留的旧 key。返回写入的数据对象
@@ -491,6 +493,16 @@
     });
   }
 
+  // 同步设置面板中的主题/语言/列数/隐藏/配色控件
+  function syncSettingsControls() {
+    $("theme-mode").value = theme;
+    $("lang-mode").value = lang;
+    $("card-columns").value = config.layout.columns || 6;
+    $("hide-cards").checked = !!config.layout.hide;
+    syncColorInputs();
+    syncColorPanel();
+  }
+
   // ============================================================
   // dnd —— 通用拖拽排序（事件委托版，参考建议 4.1）
   // 只在容器上绑定一次事件，内部元素增删/重建都无需重新绑定监听器：
@@ -526,6 +538,21 @@
       const moved = items.splice(from, 1)[0];
       if (!moved) return;
       items.splice(to, 0, moved);
+
+      // 同步移动对应 DOM 节点，避免 commit 中全量重建列表
+      const draggableItems = Array.from(container.querySelectorAll('[draggable="true"]'));
+      const fromEl = draggableItems[from];
+      const toEl = draggableItems[to];
+      if (fromEl && toEl) {
+        if (from < to) toEl.after(fromEl);
+        else toEl.before(fromEl);
+        // 移动后重新查询 DOM 顺序并重排 data-index（含内部控件），避免使用移动前的静态 NodeList
+        Array.from(container.querySelectorAll('[draggable="true"]'))
+          .forEach((el, idx) => {
+            el.dataset.index = idx;
+            el.querySelectorAll('[data-index]').forEach(ctl => { ctl.dataset.index = idx; });
+          });
+      }
       commit();
     });
   }
@@ -644,6 +671,7 @@
 
   // 编辑引擎字段（name/url/keyword）；url 校验搜索地址、keyword 校验重复
   function editEngine(i, key, value) {
+    if (key === "name" && !value.trim()) { toast(t("engine_name_empty")); return; }
     if (key === "url" && !isValidEngineUrl(value)) { toast(t("engine_url_invalid")); return; }
     if (key === "keyword" && !keywordUnique(value, i)) { toast(t("keyword_dup")); return; }
     engines[i][key] = value.trim();
@@ -656,8 +684,10 @@
   function deleteEngine(i) {
     if (engines.length <= 1) { toast(t("at_least_one")); return; }
     engines.splice(i, 1);
-    // 原选中引擎被删（索引越界）→ 收敛到最后一项；未越界则保持原选中
-    if (engineIndex >= engines.length) engineIndex = engines.length - 1;
+    // 删除位置在当前选中项之前 → 索引前移保持选中同一引擎；
+    // 删除当前项或之后 → 保持/越界收敛，保证不会跳到错误项
+    if (i < engineIndex) engineIndex--;
+    else if (engineIndex >= engines.length) engineIndex = engines.length - 1;
     markEngineDirty();
     saveState();
     renderEngines();
@@ -707,8 +737,8 @@
   // 站点图标三级回退：favicon.ico → favicon.svg → Google favicon → 占位地球
   function faviconFallback(img, host) {
     if (!img.dataset.svg) { img.dataset.svg = "1"; img.src = "https://" + host + "/favicon.svg"; return; }
+    // 第三方 favicon 服务兜底；若不可用则继续回退到本地占位图
     if (!img.dataset.google) { img.dataset.google = "1"; img.src = "https://www.google.com/s2/favicons?domain=" + host + "&sz=64"; return; }
-    // 到占位地球后移除监听标记：后续 error 事件不再重复触发回退
     img.removeAttribute("data-favicon-host");
     img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23ccc'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-size='32'%3E🌐%3C/text%3E%3C/svg%3E";
   }
@@ -771,22 +801,27 @@
   }
 
   // 重新校正网格与设置面板中卡片节点的 data-index / id / 序号
-  function reindexSiteViews() {
-    document.querySelectorAll("#sites a.shortcut").forEach((el, idx) => { el.dataset.index = idx; });
-    document.querySelectorAll("#editor .card-sort-item").forEach((el, idx) => {
+  function reindexSiteViews(startIndex) {
+    startIndex = Number.isInteger(startIndex) ? startIndex : 0;
+    const gridCards = document.querySelectorAll("#sites a.shortcut");
+    const editorItems = document.querySelectorAll("#editor .card-sort-item");
+    for (let idx = startIndex; idx < config.sites.length; idx++) {
+      const gridEl = gridCards[idx];
+      if (gridEl) gridEl.dataset.index = idx;
+      const item = editorItems[idx];
+      if (!item) continue;
       const site = config.sites[idx];
-      if (!site) return;
-      el.dataset.index = idx;
-      const title = el.querySelector(".card-title");
+      item.dataset.index = idx;
+      const title = item.querySelector(".card-title");
       if (title) {
         title.dataset.index = idx;
         const num = title.querySelector("span:first-child");
         if (num) num.textContent = `${idx + 1}. ${site.name}`;
       }
-      const detail = el.querySelector(".card-detail");
+      const detail = item.querySelector(".card-detail");
       if (detail) detail.id = "card-detail-" + idx;
-      el.querySelectorAll("[data-index]").forEach(ctl => { ctl.dataset.index = idx; });
-    });
+      item.querySelectorAll("[data-index]").forEach(ctl => { ctl.dataset.index = idx; });
+    }
   }
 
   // 渲染主页面：卡片网格 + 添加卡片 + 设置面板编辑器
@@ -841,7 +876,7 @@
     if (cardEl) cardEl.remove();
     const itemEl = document.querySelector(`#editor .card-sort-item[data-index="${index}"]`);
     if (itemEl) itemEl.remove();
-    reindexSiteViews();
+    reindexSiteViews(index);
   }
 
   // 只更新第 i 张卡片对应的 DOM（网格卡片 + 设置面板列表项），避免整页重绘（参考建议 4.1）
@@ -1053,8 +1088,7 @@
         applyI18n();
         applyTheme();
         applyColors();
-        syncColorPanel();
-        syncColorInputs();
+        syncSettingsControls();
         renderEngines();
         renderSites();
         toast(t("import_ok"));
@@ -1273,11 +1307,23 @@
     });
 
     // 拖拽排序 + 卡片右键菜单：事件委托，只绑定一次（列表重建无需重新绑定）
-    const commitSites = () => { saveState(); renderSites(); };
-    const commitEngines = () => { markEngineDirty(); saveState(); renderEngines(); };
-    attachDelegatedDragSort($("sites"), () => config.sites, commitSites);
+    // 网格拖拽：DOM 已在 drop 中增量移动，这里只持久化并同步设置面板编辑器
+    const commitSitesGrid = () => {
+      saveState();
+      if ($("panel").style.display === "block") renderEditor();
+    };
+    // 引擎拖拽：增量移动后只需同步下拉框和快捷菜单
+    const commitEngines = () => {
+      markEngineDirty();
+      saveState();
+      syncEngineSelect();
+      refreshSearchMenu();
+    };
+    // 编辑器内拖拽：编辑器 DOM 已增量移动，但网格仍需按新顺序重排
+    const commitSitesEditor = () => { saveState(); renderSites(); };
+    attachDelegatedDragSort($("sites"), () => config.sites, commitSitesGrid);
     attachDelegatedDragSort($("engine-list"), () => engines, commitEngines);
-    attachDelegatedDragSort($("editor"), () => config.sites, commitSites);
+    attachDelegatedDragSort($("editor"), () => config.sites, commitSitesEditor);
     $("sites").addEventListener("contextmenu", e => {
       const link = e.target.closest("a.shortcut");
       if (!link) return;
@@ -1292,12 +1338,7 @@
       panel.style.display = opening ? "block" : "none";
       $("settings").setAttribute("aria-expanded", String(opening));
       if (opening) {
-        $("theme-mode").value = theme;
-        $("lang-mode").value = lang;
-        $("card-columns").value = config.layout.columns || 6;
-        $("hide-cards").checked = !!config.layout.hide;
-        syncColorInputs();
-        syncColorPanel();
+        syncSettingsControls();
         renderEngineList();
         renderEditor();
       } else {

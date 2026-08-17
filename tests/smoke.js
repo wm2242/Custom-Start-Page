@@ -519,6 +519,17 @@ function getToastText(win) {
     JSON.parse(w5.localStorage.getItem("homepage")).engines[1].keyword === "zz",
     "不重复的关键词可正常编辑");
 
+  // 8.1b 编辑引擎时清空名称 → 拒绝，避免 sanitizeState 无感知过滤该引擎
+  toast5.textContent = "";
+  const nameInput5 = w5.document.querySelector(
+    '#engine-list .engine-sort-item[data-index="0"] input[data-field="name"]');
+  nameInput5.value = "";
+  nameInput5.dispatchEvent(new w5.Event("change", { bubbles: true }));
+  assert(toast5.textContent === "搜索引擎名称不能为空", "清空引擎名称被拒绝并提示具体文案");
+  assert(JSON.parse(w5.localStorage.getItem("homepage")).engines.length === 5 &&
+    JSON.parse(w5.localStorage.getItem("homepage")).engines[0].name === "Google",
+    "清空名称后引擎未被 sanitize 过滤");
+
   // 8.2 选中最后一个引擎后删除第一个 → 原选中引擎保留（索引收敛到最后一项），无失效引用
   const engineSel5 = w5.document.getElementById("engine");
   engineSel5.value = "4";
