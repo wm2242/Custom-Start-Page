@@ -71,10 +71,6 @@
         return v === null ? fallback : v;
       } catch (e) { return fallback; }
     },
-    set(key, value) {
-      try { localStorage.setItem(key, value); return true; }
-      catch (e) { return false; }
-    },
     getJSON(key) {
       try {
         const v = localStorage.getItem(key);
