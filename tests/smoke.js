@@ -84,6 +84,9 @@ function getToastText(win) {
   assert(menu.classList.contains("open") &&
     menu.querySelectorAll(".search-engine-item").length === 5,
     "点击按钮打开菜单时渲染 5 项");
+  assert(menu.querySelector(".search-engine-item.active") &&
+    menu.querySelector(".search-engine-item.active").dataset.index === "0",
+    "当前搜索引擎在菜单中有明显选中状态");
   assert(document.getElementById("search-engine-btn").textContent === "⌃",
     "菜单打开后按钮箭头变为 ⌃");
   menu.querySelector(".search-engine-item").click(); // 选择当前引擎
@@ -98,7 +101,7 @@ function getToastText(win) {
     "点击空白处关闭菜单并复位箭头");
   const saved = JSON.parse(window.localStorage.getItem("homepage"));
   assert(saved.search === undefined, "search 不再单独存储（由 engines+engineIndex 派生）");
-  assert(saved.engines[saved.engineIndex].url === "https://www.google.com/search?q=",
+  assert(saved.engines[saved.engineIndex].url === "https://www.google.com/search?q=%s",
     "当前搜索地址 = engines[engineIndex].url（单一 key 存储）");
 
   // ---- 国际化切换 ----
@@ -166,6 +169,14 @@ function getToastText(win) {
   assert(htmlStr.includes("&lt;img src=x") && !htmlStr.includes('<img src=x onerror'),
     "恶意站点名被 HTML 转义，无 XSS 注入");
 
+  // ---- 输入上限：新增/编辑时超长字段在保存时即被截断（不等到重载）----
+  siteName.value = "x".repeat(300);
+  siteUrl.value = "https://example.com";
+  document.getElementById("save-site").click();
+  const longNameSaved = JSON.parse(window.localStorage.getItem("homepage")).sites;
+  assert(longNameSaved[longNameSaved.length - 1].name.length <= 100,
+    "新增卡片超长名称保存时被截断（≤100）");
+
   // ---- 自定义图标协议白名单：非法协议不得进入 <img src> ----
   sites.querySelector(".add-card").click();
   document.getElementById("card-name").value = "图标安全";
@@ -188,9 +199,19 @@ function getToastText(win) {
   const menuEl = document.getElementById("card-menu");
   assert(menuEl && menuEl.querySelectorAll("div").length === 3, "右键菜单弹出 3 项");
   menuEl.querySelectorAll("div")[1].click(); // 删除 → 弹出确认对话框
-  assert(document.getElementById("confirm-dialog").classList.contains("open"), "删除卡片弹出确认对话框");
+  assert(!document.getElementById("confirm-dialog").hidden, "删除卡片弹出确认对话框");
   document.getElementById("confirm-ok").click();
   assert(sites.querySelectorAll("a.shortcut").length === beforeCount - 1, "确认后右键删除卡片生效");
+
+  // 确认对话框可用 Esc 关闭（不执行删除）
+  const escBefore = sites.querySelectorAll("a.shortcut").length;
+  const card2 = sites.querySelector("a.shortcut"); // 重新获取（上一张已被删除）
+  card2.dispatchEvent(new window.Event("contextmenu", { bubbles: true, cancelable: true }));
+  document.getElementById("card-menu").querySelectorAll("div")[1].click();
+  assert(!document.getElementById("confirm-dialog").hidden, "再次弹出确认对话框");
+  document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert(document.getElementById("confirm-dialog").hidden, "Esc 关闭确认对话框");
+  assert(sites.querySelectorAll("a.shortcut").length === escBefore, "Esc 取消后卡片未被删除");
 
   // ---- 卡片编辑器保存 ----
   const gridLink = sites.querySelector("a.shortcut");
@@ -269,16 +290,47 @@ function getToastText(win) {
   document.getElementById("engine-name").value = "坏引擎";
   document.getElementById("engine-url").value = "https://example.com"; // 无查询参数
   document.getElementById("save-engine").click();
-  assert(currentToast() === "搜索地址无效，需包含查询参数（如 ?q= 或 %s）",
+  assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
     "无查询参数的搜索地址被拒绝并提示具体文案");
   assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5, "拒绝后引擎列表未变化");
+
+  // 非占位符的查询 URL 同样拒绝（如 ?x=1 无法承载查询词）
+  clearToast();
+  document.getElementById("engine-url").value = "https://example.com/search?x=1";
+  document.getElementById("save-engine").click();
+  assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
+    "无占位符的查询 URL 被拒绝并提示具体文案");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5, "拒绝后引擎列表仍为 5 个");
+
+  // 裸 ? / & 结尾的 URL 同样拒绝（强制 %s 后不再有拼接边界缺陷）
+  clearToast();
+  document.getElementById("engine-url").value = "https://example.com/search?";
+  document.getElementById("save-engine").click();
+  assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
+    "裸问号结尾的 URL 被拒绝");
+  clearToast();
+  document.getElementById("engine-url").value = "https://example.com/search?lang=zh&";
+  document.getElementById("save-engine").click();
+  assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
+    "末尾 & 结尾的 URL 被拒绝");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5,
+    "边界 URL 拒绝后引擎列表仍为 5 个");
+
+  // 含占位符的 URL 可通过校验
+  clearToast();
+  document.getElementById("engine-name").value = "占位引擎";
+  document.getElementById("engine-url").value = "https://example.com/search?q=%s";
+  document.getElementById("save-engine").click();
+  assert(currentToast() === "", "含 %s 占位符的 URL 可通过校验");
+  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 6,
+    "占位符引擎添加成功");
 
   // ---- 3.2 导入结构损坏的数据被归一化 ----
   const importInput = document.getElementById("import-data");
   const badFile = new window.File([JSON.stringify({
     sites: "not-an-array",                                   // 类型错误
     layout: { columns: "abc", hide: true },                  // 非法列数
-    engines: [null, { name: "E1", url: "https://e1.com/search?q=" },
+    engines: [null, { name: "E1", url: "https://e1.com/search?q=%s" },
       { name: "bad", url: "javascript:alert(1)" }], // 含非法条目/非法协议
     engineIndex: 0
   })], "bad.json", { type: "application/json" });
@@ -349,6 +401,13 @@ function getToastText(win) {
   assert(currentToast() === "备份文件过大（超过 5 MB）",
     "超大备份文件被拒绝并提示具体翻译文案");
 
+  // ---- 输入上限：新增引擎超长名称在保存时即被截断（放在引擎数量断言之后）----
+  document.getElementById("engine-name").value = "e".repeat(300);
+  document.getElementById("engine-url").value = "https://example.com/search?q=%s";
+  document.getElementById("save-engine").click();
+  const engSaved = JSON.parse(window.localStorage.getItem("homepage")).engines;
+  assert(engSaved.every(e => e.name.length <= 100), "新增引擎超长名称保存时被截断（≤100）");
+
   // ---- 3.1 localStorage 数据损坏 + config.json 加载失败 → 不崩溃，回退默认 ----
   const dom2 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
   const w2 = dom2.window;
@@ -386,11 +445,11 @@ function getToastText(win) {
   w4.fetch = window.fetch;
   w4.navigator.language = "zh-CN"; // 固定系统语言为中文：英文标题只可能来自迁移的 lang=en
   w4.localStorage.setItem("homepage", JSON.stringify({ // 旧格式：无 version，含 search
-    search: "https://legacy.example.com/search?q=",
+    search: "https://legacy.example.com/search?q=%s",
     sites: [{ name: "旧站", url: "https://legacy.example.com", iconType: "auto", icon: "" }],
     layout: { columns: 4, hide: false }
   }));
-  w4.localStorage.setItem("engines", JSON.stringify([{ name: "旧引擎", url: "https://legacy.example.com/search?q=", keyword: "l" }]));
+  w4.localStorage.setItem("engines", JSON.stringify([{ name: "旧引擎", url: "https://legacy.example.com/search?q=%s", keyword: "l" }]));
   w4.localStorage.setItem("engineIndex", "0");
   w4.localStorage.setItem("theme", "dark");
   w4.localStorage.setItem("lang", "en");
@@ -456,7 +515,7 @@ function getToastText(win) {
     JSON.parse(w5.localStorage.getItem("homepage")).engines[1].keyword === "zz",
     "不重复的关键词可正常编辑");
 
-  // 8.2 选中最后一个引擎后删除第一个 → 索引越界自动回退 0，无失效 search 引用
+  // 8.2 选中最后一个引擎后删除第一个 → 原选中引擎保留（索引收敛到最后一项），无失效引用
   const engineSel5 = w5.document.getElementById("engine");
   engineSel5.value = "4";
   engineSel5.dispatchEvent(new w5.Event("change"));
@@ -464,9 +523,9 @@ function getToastText(win) {
   w5.document.querySelector("#engine-list .engine-sort-item button").click(); // 删除第 1 个（Google）
   const st5 = JSON.parse(w5.localStorage.getItem("homepage"));
   assert(st5.engines.length === 4, "删除后剩 4 个引擎");
-  assert(st5.engineIndex === 0, "索引越界自动回退到 0");
-  assert(st5.search === undefined, "无失效的 search 引用（搜索地址由 engines[0] 派生）");
-  assert(engineSel5.value === "0", "下拉框同步回退到第 1 个引擎");
+  assert(st5.engineIndex === 3, "原选中引擎保留，索引收敛到最后一项（3）");
+  assert(st5.search === undefined, "无失效的 search 引用（搜索地址由 engines[engineIndex] 派生）");
+  assert(engineSel5.value === "3", "下拉框同步到收敛后的索引");
 
   // ---- 搜索提交核心逻辑：普通 / 快捷关键词 / ! 强制当前引擎 ----
   const domSearch = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });

@@ -81,7 +81,8 @@
       } catch (e) { return null; }
     },
     setJSON(key, value) {
-      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+      try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+      catch (e) { return false; }
     }
   };
 
@@ -104,16 +105,12 @@
     $("confirm-message").textContent = msg;
     confirmCallback = onOk;
     dialog.hidden = false;
-    dialog.classList.add("open");
     const ok = $("confirm-ok");
     if (ok) ok.focus();
   }
   function hideConfirm() {
     const dialog = $("confirm-dialog");
-    if (dialog) {
-      dialog.hidden = true;
-      dialog.classList.remove("open");
-    }
+    if (dialog) dialog.hidden = true;
     confirmCallback = null;
   }
 
@@ -140,9 +137,9 @@
       add_card: "添加卡片", edit_card: "编辑卡片", delete_card: "删除卡片", delete: "删除",
       keyword: "关键词",
       confirm_delete: "确定删除此卡片？", at_least_one: "至少保留一个搜索引擎",
-      keyword_dup: "关键词重复", engine_url_invalid: "搜索地址无效，需包含查询参数（如 ?q= 或 %s）",
+      keyword_dup: "关键词重复", engine_url_invalid: "搜索地址无效，需包含 %s 或 {query} 占位符",
       import_fail: "导入失败", import_too_large: "备份文件过大（超过 {n} MB）",
-      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功"
+      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功", save_failed: "保存失败：浏览器存储不可用"
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
@@ -163,9 +160,9 @@
       add_card: "Add Card", edit_card: "Edit Card", delete_card: "Delete Card", delete: "Delete",
       keyword: "Keyword",
       confirm_delete: "Delete this card?", at_least_one: "Keep at least one search engine",
-      keyword_dup: "Keyword already exists", engine_url_invalid: "Invalid search URL — must contain a query parameter (e.g. ?q= or %s)",
+      keyword_dup: "Keyword already exists", engine_url_invalid: "Invalid search URL — must contain a %s or {query} placeholder",
       import_fail: "Import failed", import_too_large: "Backup file too large (over {n} MB)",
-      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported"
+      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported", save_failed: "Save failed: browser storage unavailable"
     }
   };
 
@@ -202,12 +199,12 @@
   // ============================================================
   // 全部持久化数据统一收口在 saveState()/loadState()（单一 key: homepage），
   // 避免分散存储导致导出/导入遗漏（参考建议 6.1）；内存中按职责拆分子对象。
-  const DEFAULT_ENGINES = [ // 默认搜索引擎列表
-    { name: "Google",     url: "https://www.google.com/search?q=", keyword: "g" },
-    { name: "Bing",       url: "https://www.bing.com/search?q=",   keyword: "b" },
-    { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=",       keyword: "ddg" },
-    { name: "百度",        url: "https://www.baidu.com/s?wd=",      keyword: "bd" },
-    { name: "GitHub",     url: "https://github.com/search?q=",     keyword: "gh" }
+  const DEFAULT_ENGINES = [ // 默认搜索引擎列表（URL 必须含 %s / {query} 占位符）
+    { name: "Google",     url: "https://www.google.com/search?q=%s", keyword: "g" },
+    { name: "Bing",       url: "https://www.bing.com/search?q=%s",   keyword: "b" },
+    { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=%s",       keyword: "ddg" },
+    { name: "百度",        url: "https://www.baidu.com/s?wd=%s",      keyword: "bd" },
+    { name: "GitHub",     url: "https://github.com/search?q=%s",     keyword: "gh" }
   ];
   const defaultLayout = { columns: 6, hide: false };  // 卡片布局默认值
 
@@ -220,6 +217,8 @@
   let lang = "system";                                 // 语言：system/zh/en
   let colors = null;                                   // 自定义配色：{bg,card,text,secondary,border} 或 null=用主题默认
   let editIndex = -1;                                  // 正在编辑的卡片索引（-1 = 新增模式）
+  let stateDirty = true;                               // 站点/引擎内容是否需要 sanitizeState
+  let engineDirty = true;                              // 关键词索引是否需要重建
 
   // ============================================================
   // normalize —— 数据校验与归一化（参考建议 3.1 / 3.2）
@@ -228,6 +227,12 @@
   // ============================================================
   const ICON_TYPES = ["auto", "url", "emoji"];
   const COLOR_KEYS = ["bg", "card", "text", "secondary", "border"]; // 可自定义配色的 CSS 变量键
+  const MAX_SITES = 200;          // 站点/卡片数量上限
+  const MAX_ENGINES = 50;         // 搜索引擎数量上限
+  const MAX_NAME_LENGTH = 100;    // 名称长度上限
+  const MAX_URL_LENGTH = 500;     // URL 长度上限
+  const MAX_ICON_LENGTH = 500;    // 图标内容长度上限
+  const MAX_KEYWORD_LENGTH = 50;  // 快捷关键词长度上限
 
   // 自定义配色：5 个颜色必须都是合法 6 位十六进制色值；任一非法则整体回退 null（用主题默认）
   function normalizeColors(c) {
@@ -244,17 +249,13 @@
   // 站点条目：修正字段类型；URL 非字符串/非法则整条丢弃；图标 URL 仅放行 http/https
   function normalizeSite(s) {
     if (!s || typeof s !== "object" || typeof s.url !== "string") return null;
-    const url = safeUrl(s.url);
+    const name = typeof s.name === "string" ? s.name.slice(0, MAX_NAME_LENGTH) : "";
+    const icon = typeof s.icon === "string" ? s.icon.slice(0, MAX_ICON_LENGTH) : "";
+    const url = safeUrl(s.url.slice(0, MAX_URL_LENGTH));
     if (url === "#") return null;
     const iconType = ICON_TYPES.includes(s.iconType) ? s.iconType : "auto";
-    const icon = typeof s.icon === "string" ? s.icon : "";
     const finalIconType = iconType === "url" ? (safeImageUrl(icon) ? "url" : "auto") : iconType;
-    return {
-      name: typeof s.name === "string" ? s.name : "",
-      url,
-      iconType: finalIconType,
-      icon
-    };
+    return { name, url, iconType: finalIconType, icon };
   }
 
   // 布局：columns 必须是 2–10 的整数，否则用默认值
@@ -282,10 +283,10 @@
       colors: null
     };
     if (!data || typeof data !== "object" || Array.isArray(data)) return out;
-    if (Array.isArray(data.sites)) out.sites = data.sites.map(normalizeSite).filter(s => s !== null);
+    if (Array.isArray(data.sites)) out.sites = data.sites.slice(0, MAX_SITES).map(normalizeSite).filter(s => s !== null);
     out.layout = normalizeLayout(data.layout);
     const eng = normalizeEngines(data.engines);
-    if (eng) out.engines = eng;
+    if (eng) out.engines = eng.slice(0, MAX_ENGINES);
     const idx = Number(data.engineIndex);
     if (Number.isInteger(idx) && idx >= 0 && idx < out.engines.length) out.engineIndex = idx;
     if (["system", "light", "dark", "custom"].includes(data.theme)) out.theme = data.theme;
@@ -301,39 +302,35 @@
     list.forEach(e => {
       if (e && typeof e === "object" &&
           typeof e.name === "string" && e.name.trim() &&
-          typeof e.url === "string" && isValidEngineUrl(e.url)) {
+          typeof e.url === "string") {
+        const name = e.name.slice(0, MAX_NAME_LENGTH);
+        const rawUrl = e.url.slice(0, MAX_URL_LENGTH);
+        if (!isValidEngineUrl(rawUrl)) return;
         out.push({
-          name: e.name,
-          url: safeUrl(e.url),
-          keyword: typeof e.keyword === "string" ? e.keyword : ""
+          name,
+          url: safeUrl(rawUrl),
+          keyword: typeof e.keyword === "string" ? e.keyword.slice(0, MAX_KEYWORD_LENGTH) : ""
         });
       }
     });
     return out.length ? out : null;
   }
 
-  // 搜索引擎地址是否可用：含 %s / {query} 占位符，或带有查询字符串的 URL 均可
-  // （同时防止拼出 "https://example.com关键字" 这类无效搜索链接，参考建议 3.4）
+  // 搜索引擎地址必须包含 %s 或 {query} 占位符：搜索时用查询词替换占位符，
+  // 不做任何 URL 字符串拼接，从根本上消除"参数名/查询值"边界缺陷
   function isValidEngineUrl(u) {
     const url = safeUrl(u);
     if (url === "#") return false;
-    return url.includes("%s") || url.includes("{query}") || url.includes("?");
+    return url.includes("%s") || url.includes("{query}");
   }
 
-  // 构造搜索链接：优先替换 %s / {query} 占位符；无占位符时按查询串形式智能追加
+  // 构造搜索链接：仅替换占位符，无拼接逻辑
   function buildSearchUrl(base, query) {
     const url = safeUrl(base);
     if (url === "#") return "#";
     const q = encodeURIComponent(query);
     if (url.includes("%s")) return url.replace(/%s/g, q);
-    if (url.includes("{query}")) return url.replace(/\{query\}/g, q);
-    if (url.includes("?")) {
-      // 查询参数在末尾：?q= / ?q / ? 直接追加；否则新增一个 q 参数
-      if (/[?&][^&#?=]*=$/.test(url) || url.endsWith("?") || url.endsWith("&")) return url + q;
-      if (/[?&][^&#?=]*$/.test(url)) return url + "=" + q;
-      return url + "&q=" + q;
-    }
-    return url + "?q=" + q;
+    return url.replace(/\{query\}/g, q);
   }
 
   // ============================================================
@@ -356,11 +353,46 @@
     });
     engineKeywordIndex = index;
     engineKeywords = keywords;
+    engineDirty = false;
+  }
+
+  function markStateDirty() { stateDirty = true; }
+  function markEngineDirty() { engineDirty = true; stateDirty = true; }
+
+  // 仅在数据发生变更时执行截断/限量与索引重建，避免每次保存都全量扫描
+  function ensureStateClean() {
+    if (stateDirty) {
+      sanitizeState();
+      stateDirty = false;
+    }
+    if (engineDirty) {
+      rebuildEngineIndex();
+    }
+  }
+
+  // 写入前统一截断/限量：运行时的新增/编辑同样受 MAX_* 约束，
+  // 避免"保存时不限制、刷新后才被归一化截断"的不一致（load/import 已由 normalize 处理）
+  function sanitizeState() {
+    if (Array.isArray(config.sites)) {
+      config.sites = config.sites.slice(0, MAX_SITES)
+        .map(normalizeSite).filter(s => s !== null);
+    }
+    if (Array.isArray(engines)) {
+      engines = engines.slice(0, MAX_ENGINES).map(e => {
+        if (!e || typeof e !== "object") return null;
+        return {
+          name: typeof e.name === "string" ? e.name.slice(0, MAX_NAME_LENGTH) : "",
+          url: typeof e.url === "string" ? e.url.slice(0, MAX_URL_LENGTH) : "",
+          keyword: typeof e.keyword === "string" ? e.keyword.slice(0, MAX_KEYWORD_LENGTH) : ""
+        };
+      }).filter(e => e && e.name.trim() && e.url);
+      engineIndex = Math.min(engineIndex, Math.max(0, engines.length - 1));
+    }
   }
 
   // 把内存状态整体写入单一 key；顺带清理迁移前遗留的旧 key。返回写入的数据对象
   function saveState() {
-    rebuildEngineIndex(); // 保证关键词索引与 engines 始终同步
+    ensureStateClean(); // 按需截断/限量 + 重建关键词索引
     const data = {
       version: STATE_VERSION,
       sites: config.sites,
@@ -371,7 +403,9 @@
       lang,
       colors
     };
-    store.setJSON("homepage", data);
+    if (!store.setJSON("homepage", data)) {
+      toast(t("save_failed"));
+    }
     // 迁移清理：旧版分散的 key 不再使用
     ["engines", "engineIndex", "theme", "lang"].forEach(k => {
       try { localStorage.removeItem(k); } catch (e) {}
@@ -411,6 +445,8 @@
     theme = data.theme;
     lang = data.lang;
     colors = data.colors;
+    markStateDirty();
+    markEngineDirty();
   }
 
   // 当前搜索地址：由引擎列表与索引派生，永不与 engineIndex 失步（参考建议 6.2）
@@ -446,6 +482,16 @@
   function syncColorPanel() {
     const colorForm = $("color-form");
     if (colorForm) colorForm.classList.toggle("show", theme === "custom");
+  }
+
+  // 同步设置面板中的颜色取色器显示值（面板打开时也用于导入后刷新）
+  function syncColorInputs() {
+    COLOR_KEYS.forEach(k => {
+      const el = $("color-" + k);
+      if (!el) return;
+      el.value = colors ? colors[k] :
+        getComputedStyle(document.body).getPropertyValue("--" + k).trim() || el.value;
+    });
   }
 
   // ============================================================
@@ -549,7 +595,8 @@
     menu.innerHTML = items.map(pair => {
       const i = pair[0];
       const e = pair[1];
-      return `<div class="search-engine-item" data-action="change-engine" data-index="${i}" role="button" tabindex="0">${escapeHtml(e.name)}</div>`;
+      const cls = i === idx ? "search-engine-item active" : "search-engine-item";
+      return `<div class="${cls}" data-action="change-engine" data-index="${i}" role="button" tabindex="0" aria-current="${i === idx ? "true" : "false"}">${escapeHtml(e.name)}</div>`;
     }).join("");
   }
 
@@ -603,6 +650,7 @@
     if (key === "url" && !isValidEngineUrl(value)) { toast(t("engine_url_invalid")); return; }
     if (key === "keyword" && !keywordUnique(value, i)) { toast(t("keyword_dup")); return; }
     engines[i][key] = value.trim();
+    markEngineDirty();
     saveState();
     renderEngines();
   }
@@ -611,7 +659,9 @@
   function deleteEngine(i) {
     if (engines.length <= 1) { toast(t("at_least_one")); return; }
     engines.splice(i, 1);
-    if (getEngineIndex() >= engines.length) engineIndex = 0;
+    // 原选中引擎被删（索引越界）→ 收敛到最后一项；未越界则保持原选中
+    if (engineIndex >= engines.length) engineIndex = engines.length - 1;
+    markEngineDirty();
     saveState();
     renderEngines();
   }
@@ -645,10 +695,12 @@
     if (!isValidEngineUrl(urlEl.value)) { toast(t("engine_url_invalid")); return; }
     if (!keywordUnique(keyword, -1)) { toast(t("keyword_dup")); return; }
     engines.push({ name: nameEl.value.trim(), url: urlEl.value.trim(), keyword });
+    markEngineDirty();
     saveState();
     renderEngines();
     nameEl.value = ""; urlEl.value = ""; keyEl.value = "";
     $("engine-form").classList.remove("show");
+    $("show-engine-form").setAttribute("aria-expanded", "false");
   }
 
   // ============================================================
@@ -659,7 +711,8 @@
   function faviconFallback(img, host) {
     if (!img.dataset.svg) { img.dataset.svg = "1"; img.src = "https://" + host + "/favicon.svg"; return; }
     if (!img.dataset.google) { img.dataset.google = "1"; img.src = "https://www.google.com/s2/favicons?domain=" + host + "&sz=64"; return; }
-    img.onerror = null;
+    // 到占位地球后移除监听标记：后续 error 事件不再重复触发回退
+    img.removeAttribute("data-favicon-host");
     img.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23ccc'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-size='32'%3E🌐%3C/text%3E%3C/svg%3E";
   }
 
@@ -668,7 +721,7 @@
     if (site.iconType === "emoji") return `<span>${escapeHtml(site.icon || "🌐")}</span>`;
     if (site.iconType === "url") {
       const icon = safeImageUrl(site.icon);
-      if (icon) return `<img src="${escapeHtml(icon)}">`;
+      if (icon) return `<img src="${escapeHtml(icon)}" data-custom-icon="1" data-fallback-host="${escapeHtml(host)}">`;
       return `<span>${escapeHtml(site.icon || "🌐")}</span>`; // 非法/空图片 URL 回退文字占位
     }
     return `<img src="https://${escapeHtml(host)}/favicon.ico" data-favicon-host="${escapeHtml(host)}">`;
@@ -797,6 +850,7 @@
   // 只更新第 i 张卡片对应的 DOM（网格卡片 + 设置面板列表项），避免整页重绘（参考建议 4.1）
   function syncSiteViews(i) {
     const site = config.sites[i];
+    if (!site) return;
     // 网格卡片
     const cardEl = document.querySelector(`#sites a.shortcut[data-index="${i}"]`);
     if (cardEl) {
@@ -845,6 +899,7 @@
 
   // 打开卡片编辑器（填充现有数据）
   function editCard(i) {
+    if (!config.sites[i]) return;
     editIndex = i;
     const card = config.sites[i];
     $("card-name").value = card.name || "";
@@ -856,8 +911,10 @@
 
   // 删除卡片（带自定义确认对话框）
   function removeCard(i) {
+    if (!config.sites[i]) return;
     showConfirm(t("confirm_delete"), () => {
       config.sites.splice(i, 1);
+      markStateDirty();
       saveState();
       if (config.layout.hide) renderSites(); else removeSiteView(i);
     });
@@ -874,21 +931,24 @@
     const isUrlType = typeEl.value === "url";
     const iconType = isUrlType && safeImageUrl(rawIcon) ? "url" : isUrlType ? "auto" : typeEl.value;
     const data = {
-      name: nameEl.value.trim() || urlEl.value,
+      name: nameEl.value.trim() || urlEl.value.trim(),
       url: safeUrl(urlEl.value.trim()),
       iconType,
       icon: rawIcon
     };
     if (data.url === "#") return; // 非法 URL 拒绝保存
+    if (editIndex >= config.sites.length) editIndex = -1;
     if (editIndex >= 0) {
       // 编辑既有卡片：就地更新对应 DOM，避免整页重绘（参考建议 4.1）
       config.sites[editIndex] = data;
+      markStateDirty();
       saveState();
       syncSiteViews(editIndex);
     } else {
       // 新增卡片：仅在网格末尾增量追加，避免整页重绘
       const newIndex = config.sites.length;
       config.sites.push(data);
+      markStateDirty();
       saveState();
       if (config.layout.hide) renderSites(); else appendSiteView(newIndex);
     }
@@ -906,17 +966,21 @@
 
   // 内联编辑卡片字段（url 字段做协议校验）；就地更新对应 DOM，不整页重绘
   function editCardValue(i, key, value) {
+    if (!config.sites[i]) return;
     if (key === "url") {
       value = safeUrl(value);
       if (value === "#") return;
     }
     if (key === "iconType" && value === "url" && !safeImageUrl(config.sites[i].icon || "")) {
-      value = "auto"; // 图片地址非法时不允许切到 url 图标，避免保存不可信/不可用图标
+      value = "auto"; // 图片地址非法时不允许切到 url 图标，并清空脏图标
+      config.sites[i].icon = "";
     }
     if (key === "icon" && config.sites[i].iconType === "url" && !safeImageUrl(value)) {
       config.sites[i].iconType = "auto";
+      value = "";
     }
     config.sites[i][key] = value;
+    markStateDirty();
     saveState();
     syncSiteViews(i);
   }
@@ -933,11 +997,13 @@
     if (data.url === "#") return; // 非法 URL 拒绝保存
     const newIndex = config.sites.length;
     config.sites.push(data);
+    markStateDirty();
     saveState();
     if (config.layout.hide) renderSites(); else appendSiteView(newIndex);
     nameEl.value = "";
     urlEl.value = "";
     $("site-form").classList.remove("show");
+    $("show-site-form").setAttribute("aria-expanded", "false");
   }
 
   // ============================================================
@@ -991,6 +1057,7 @@
         applyTheme();
         applyColors();
         syncColorPanel();
+        syncColorInputs();
         renderEngines();
         renderSites();
         toast(t("import_ok"));
@@ -1057,6 +1124,95 @@
     $("card-editor").classList.add("open");
   }
 
+  // 自定义配色相关事件
+  function bindColorEvents() {
+    // 从 5 个颜色输入框收集当前值（不持久化）
+    function collectColorValues() {
+      const obj = {};
+      COLOR_KEYS.forEach(k => { obj[k] = $("color-" + k).value; });
+      return obj;
+    }
+    // 实时预览：只改内联变量，不动已保存的 colors
+    function previewColors() {
+      const root = document.body;
+      COLOR_KEYS.forEach(k => root.style.setProperty("--" + k, $("color-" + k).value));
+    }
+    COLOR_KEYS.forEach(k => {
+      const el = $("color-" + k);
+      if (!el) return;
+      el.addEventListener("input", previewColors);  // 取色过程实时预览
+      el.addEventListener("change", previewColors); // 取色器确认后仍先预览
+    });
+    // 配色配置面板的显示由主题模式（custom）控制（见 syncColorPanel），
+    // 面板内三个按钮只处理颜色本身
+    $("color-save").onclick = () => {
+      colors = collectColorValues();  // 保存：提交为正式配色并持久化
+      saveState();
+      applyColors();
+    };
+    $("color-cancel").onclick = () => {
+      applyColors();      // 取消：撤销预览，恢复已保存配色（无则用主题默认）
+      syncColorInputs();
+    };
+    $("color-reset").onclick = () => {
+      colors = null;      // 恢复默认：清除配色并持久化
+      saveState();
+      applyColors();
+      syncColorInputs();
+    };
+  }
+
+  // 搜索提交逻辑
+  function bindSearchEvents() {
+    // 支持三种输入：`关键词 内容`（用快捷关键词引擎）、`!内容`（当前引擎）、普通搜索
+    $("search").addEventListener("submit", e => {
+      e.preventDefault();
+      let query = $("query").value.trim();
+      if (!query) return;
+      const parts = query.split(/\s+/);
+      const first = parts[0].toLowerCase();
+
+      // 快捷关键词：`g xxx` → Google 搜索 xxx（用 Map 索引 O(1) 定位）
+      const keywordEngineIndex = engineKeywordIndex.get(first);
+      if (keywordEngineIndex !== undefined) {
+        query = parts.slice(1).join(" ");
+        if (query) navigate(buildSearchUrl(engines[keywordEngineIndex].url, query));
+        return;
+      }
+
+      // `!xxx` → 强制用当前引擎
+      if (query.startsWith("!")) {
+        query = query.slice(1).trim();
+        navigate(buildSearchUrl(currentSearch(), query));
+        return;
+      }
+
+      navigate(buildSearchUrl(currentSearch(), query));
+    });
+  }
+
+  // 图片加载失败统一处理：自定义图片回退 favicon，favicon 三级回退
+  function bindImageFallbackEvents() {
+    document.addEventListener("error", e => {
+      const img = e.target;
+      if (!img || !img.matches) return;
+      // 自定义图片加载失败：回退到该站点 favicon，再走 favicon 三级回退
+      if (img.matches("img[data-custom-icon]")) {
+        const host = img.dataset.fallbackHost;
+        if (host) {
+          img.removeAttribute("data-custom-icon");
+          img.removeAttribute("data-fallback-host");
+          img.src = "https://" + host + "/favicon.ico";
+          img.dataset.faviconHost = host;
+        }
+        return;
+      }
+      if (img.matches("img[data-favicon-host]")) {
+        faviconFallback(img, img.dataset.faviconHost);
+      }
+    }, true);
+  }
+
   function bindEvents() {
     // ---- 动态控件事件委托：所有 data-action 统一处理，无需全局函数 -------
     document.addEventListener("click", e => {
@@ -1121,7 +1277,7 @@
 
     // 拖拽排序 + 卡片右键菜单：事件委托，只绑定一次（列表重建无需重新绑定）
     const commitSites = () => { saveState(); renderSites(); };
-    const commitEngines = () => { saveState(); renderEngines(); };
+    const commitEngines = () => { markEngineDirty(); saveState(); renderEngines(); };
     attachDelegatedDragSort($("sites"), () => config.sites, commitSites);
     attachDelegatedDragSort($("engine-list"), () => engines, commitEngines);
     attachDelegatedDragSort($("editor"), () => config.sites, commitSites);
@@ -1154,10 +1310,15 @@
 
     // 添加搜索引擎表单
     $("save-engine").onclick = addEngine;
-    $("show-engine-form").onclick = () => $("engine-form").classList.toggle("show");
+    $("show-engine-form").onclick = () => {
+      const form = $("engine-form");
+      const open = form.classList.toggle("show");
+      $("show-engine-form").setAttribute("aria-expanded", String(open));
+    };
     $("cancel-engine").onclick = () => {
       ["engine-name", "engine-url", "engine-keyword"].forEach(id => $(id).value = "");
       $("engine-form").classList.remove("show");
+      $("show-engine-form").setAttribute("aria-expanded", "false");
     };
 
     // 原生下拉箭头随展开/关闭翻转（事件委托到 document，覆盖动态渲染的卡片图标选择框）：
@@ -1173,7 +1334,14 @@
     document.addEventListener("change", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
     document.addEventListener("focusout", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
     document.addEventListener("keydown", e => {
-      if (e.key === "Escape" && isArrowSelect(e)) setArrowOpen(e.target, false);
+      if (e.key !== "Escape") return;
+      if (isArrowSelect(e)) {
+        setArrowOpen(e.target, false);
+        return;
+      }
+      // Esc 关闭自定义确认对话框（打开时）
+      const dialog = $("confirm-dialog");
+      if (dialog && !dialog.hidden) hideConfirm();
     });
 
     // 搜索引擎下拉切换（菜单未打开时无需重绘）
@@ -1195,10 +1363,15 @@
 
     // 添加网站表单
     $("save-site").onclick = addSite;
-    $("show-site-form").onclick = () => $("site-form").classList.toggle("show");
+    $("show-site-form").onclick = () => {
+      const form = $("site-form");
+      const open = form.classList.toggle("show");
+      $("show-site-form").setAttribute("aria-expanded", String(open));
+    };
     $("cancel-site").onclick = () => {
       ["site-name", "site-url"].forEach(id => $(id).value = "");
       $("site-form").classList.remove("show");
+      $("show-site-form").setAttribute("aria-expanded", "false");
     };
 
     // 数据导入导出
@@ -1224,50 +1397,7 @@
       syncColorPanel();
     });
 
-    // ---------- 自定义配色（面板内：预览 / 保存 / 取消 / 恢复默认）----------
-    // 从 5 个颜色输入框收集当前值（不持久化）
-    function collectColorValues() {
-      const obj = {};
-      COLOR_KEYS.forEach(k => { obj[k] = $("color-" + k).value; });
-      return obj;
-    }
-    // 实时预览：只改内联变量，不动已保存的 colors
-    function previewColors() {
-      const root = document.body;
-      COLOR_KEYS.forEach(k => root.style.setProperty("--" + k, $("color-" + k).value));
-    }
-    // 面板打开时把颜色控件同步为当前状态（无自定义时取当前生效色）
-    function syncColorInputs() {
-      COLOR_KEYS.forEach(k => {
-        const el = $("color-" + k);
-        if (!el) return;
-        el.value = colors ? colors[k] :
-          getComputedStyle(document.body).getPropertyValue("--" + k).trim() || el.value;
-      });
-    }
-    COLOR_KEYS.forEach(k => {
-      const el = $("color-" + k);
-      if (!el) return;
-      el.addEventListener("input", previewColors);  // 取色过程实时预览
-      el.addEventListener("change", previewColors); // 取色器确认后仍先预览
-    });
-    // 配色配置面板的显示由主题模式（custom）控制（见 syncColorPanel），
-    // 面板内三个按钮只处理颜色本身
-    $("color-save").onclick = () => {
-      colors = collectColorValues();  // 保存：提交为正式配色并持久化
-      saveState();
-      applyColors();
-    };
-    $("color-cancel").onclick = () => {
-      applyColors();      // 取消：撤销预览，恢复已保存配色（无则用主题默认）
-      syncColorInputs();
-    };
-    $("color-reset").onclick = () => {
-      colors = null;      // 恢复默认：清除配色并持久化
-      saveState();
-      applyColors();
-      syncColorInputs();
-    };
+    bindColorEvents();
 
     // 语言切换（立即重渲染）
     $("lang-mode").addEventListener("change", function () {
@@ -1278,40 +1408,8 @@
       renderSites();
     });
 
-    // ---------- 搜索提交 ----------
-    // 支持三种输入：`关键词 内容`（用快捷关键词引擎）、`!内容`（当前引擎）、普通搜索
-    $("search").addEventListener("submit", e => {
-      e.preventDefault();
-      let query = $("query").value.trim();
-      if (!query) return;
-      const parts = query.split(/\s+/);
-      const first = parts[0].toLowerCase();
-
-      // 快捷关键词：`g xxx` → Google 搜索 xxx（用 Map 索引 O(1) 定位）
-      const keywordEngineIndex = engineKeywordIndex.get(first);
-      if (keywordEngineIndex !== undefined) {
-        query = parts.slice(1).join(" ");
-        if (query) navigate(buildSearchUrl(engines[keywordEngineIndex].url, query));
-        return;
-      }
-
-      // `!xxx` → 强制用当前引擎
-      if (query.startsWith("!")) {
-        query = query.slice(1).trim();
-        navigate(buildSearchUrl(currentSearch(), query));
-        return;
-      }
-
-      navigate(buildSearchUrl(currentSearch(), query));
-    });
-
-    // 捕获阶段监听图片加载失败：favicon 三级回退无需内联 onerror
-    document.addEventListener("error", e => {
-      const img = e.target;
-      if (img && img.matches && img.matches("img[data-favicon-host]")) {
-        faviconFallback(img, img.dataset.faviconHost);
-      }
-    }, true);
+    bindSearchEvents();
+    bindImageFallbackEvents();
   }
   // ============================================================
   // boot —— 启动

@@ -37,7 +37,7 @@
 <div id="engine-list" class="collapse-box"></div>
 
 
-<button id="show-engine-form">
+<button id="show-engine-form" aria-expanded="false" aria-controls="engine-form">
 ＋ <span data-i18n="add_engine">添加搜索引擎</span>
 </button>
 
@@ -80,7 +80,7 @@ placeholder="快捷关键词">
 <div id="editor" class="collapse-box"></div>
 
 
-<button id="show-site-form">
+<button id="show-site-form" aria-expanded="false" aria-controls="site-form">
 ＋ <span data-i18n="add_site">添加网站</span>
 </button>
 
@@ -241,7 +241,8 @@ placeholder="搜索网页"
 autofocus>
 
 
-<button id="search-btn" type="submit">
+<div class="search-actions">
+<button id="search-btn" type="submit" aria-label="搜索">
 <svg class="search-icon" viewBox="0 0 24 24">
 <path d="M10.5 5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/>
 <path d="m15 15 5 5"/>
@@ -253,6 +254,7 @@ data-i18n-title="search_engine_menu" title="选择搜索引擎" aria-label="选�
 aria-haspopup="true" aria-expanded="false" aria-controls="search-engine-menu">
 ⌄
 </button>
+</div>
 
 
 <div id="search-engine-menu"></div>
