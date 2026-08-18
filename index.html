@@ -202,6 +202,85 @@ max="10">
 </div>
 
 
+<h3 class="collapse-title" data-target="favorites-editor" data-action="collapse" tabindex="0" role="button" aria-expanded="false">
+<span data-i18n="favorites_manage">收藏夹管理</span> <span>⌄</span>
+</h3>
+
+<div id="favorites-editor" class="collapse-box">
+
+<input id="favorites-search"
+data-i18n-placeholder="search_placeholder"
+placeholder="搜索收藏夹">
+
+<div class="form-buttons">
+<button id="add-folder" type="button">
+<span data-i18n="add_folder">新建文件夹</span>
+</button>
+
+<button id="add-bookmark" type="button">
+<span data-i18n="add_bookmark">添加收藏</span>
+</button>
+</div>
+
+<div class="form-buttons">
+<button id="export-favorites" type="button">
+<span data-i18n="export_favorites">导出收藏夹</span>
+</button>
+
+<label class="import-label">
+<span data-i18n="import_favorites">导入收藏夹</span>
+<input id="import-favorites" type="file" accept=".json,text/html">
+</label>
+</div>
+
+<div id="favorites-tree"></div>
+
+</div>
+
+
+<h3 data-i18n="sync_settings">云同步</h3>
+
+<div class="card-setting">
+<label data-i18n="sync_worker_url">Worker 地址</label>
+<input id="sync-worker-url" type="url" placeholder="https://sync.example.workers.dev">
+</div>
+
+<div class="form-buttons">
+<button id="sync-enable" type="button">
+<span data-i18n="enable_sync">启用云同步</span>
+</button>
+
+<button id="sync-upload" type="button">
+<span data-i18n="sync_upload">立即上传</span>
+</button>
+
+<button id="sync-download" type="button">
+<span data-i18n="sync_download">从云端恢复</span>
+</button>
+</div>
+
+<div class="form-buttons">
+<button id="sync-clear" type="button">
+<span data-i18n="sync_clear">清除云端数据</span>
+</button>
+
+<button id="export-keys" type="button">
+<span data-i18n="export_keys">导出密钥</span>
+</button>
+
+<button id="import-keys" type="button">
+<span data-i18n="import_keys">导入密钥</span>
+</button>
+</div>
+
+<input id="import-keys-file" type="file" accept=".json" style="display:none">
+
+<div class="card-setting">
+<label data-i18n="set_password">设置主密码</label>
+<input id="master-password" type="password" placeholder="••••••••">
+</div>
+
+
 <h3 data-i18n="data_manage">数据管理</h3>
 
 <button id="export-data">

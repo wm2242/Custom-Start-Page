@@ -730,3 +730,109 @@ box-shadow:0 10px 30px rgba(0,0,0,.2);
 .modal-box p{
 margin:0 0 16px;
 }
+
+/* ---- 收藏夹 ---- */
+.favorites-tree{
+list-style:none;
+padding:0;
+margin:8px 0;
+font-size:14px;
+}
+
+.favorites-tree ul{
+list-style:none;
+padding-left:18px;
+margin:0;
+}
+
+.favorite-folder,
+.favorite-bookmark{
+margin:4px 0;
+}
+
+.favorite-folder-title{
+display:flex;
+align-items:center;
+gap:6px;
+padding:4px 6px;
+border-radius:6px;
+background:var(--bg);
+}
+
+.favorite-folder-title .folder-arrow{
+display:inline-block;
+width:12px;
+color:var(--secondary);
+}
+
+.favorite-folder-title .folder-name{
+flex:1;
+font-weight:600;
+}
+
+.favorite-folder-title button,
+.favorite-bookmark button{
+height:24px;
+padding:0 8px;
+font-size:12px;
+border:1px solid var(--border);
+border-radius:6px;
+background:var(--card);
+color:var(--text);
+cursor:pointer;
+}
+
+.favorite-bookmark{
+display:flex;
+align-items:center;
+gap:6px;
+padding:4px 6px;
+border-radius:6px;
+}
+
+.favorite-bookmark:hover{
+background:var(--bg);
+}
+
+.favorite-bookmark a{
+flex:1;
+color:var(--text);
+text-decoration:none;
+overflow:hidden;
+white-space:nowrap;
+text-overflow:ellipsis;
+}
+
+.favorite-bookmark a:hover{
+color:var(--accent);
+}
+
+.favorites-empty{
+color:var(--secondary);
+padding:12px;
+text-align:center;
+font-size:13px;
+}
+
+.favorite-search-result{
+padding:6px 8px;
+border-bottom:1px solid var(--border);
+font-size:13px;
+}
+
+.favorite-search-result a{
+color:var(--text);
+text-decoration:none;
+}
+
+.favorite-search-result a:hover{
+color:var(--accent);
+}
+
+#favorites-editor .form-buttons{
+margin-top:6px;
+}
+
+#import-favorites{
+display:none;
+}

@@ -136,7 +136,15 @@
       confirm_delete: "确定删除此卡片？", at_least_one: "至少保留一个搜索引擎",
       keyword_dup: "关键词重复", engine_name_empty: "搜索引擎名称不能为空", engine_url_invalid: "搜索地址无效，需包含 %s 或 {query} 占位符",
       import_fail: "导入失败", import_too_large: "备份文件过大（超过 {n} MB）",
-      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功", save_failed: "保存失败：本次更改未写入存储，请检查浏览器设置后重试"
+      import_version: "备份由更新版本导出，无法导入", import_ok: "导入成功", save_failed: "保存失败：本次更改未写入存储，请检查浏览器设置后重试",
+      favorites: "收藏夹", favorites_empty: "暂无收藏", edit: "编辑",
+      favorites_manage: "收藏夹管理", add_folder: "新建文件夹", add_bookmark: "添加收藏",
+      export_favorites: "导出收藏夹", import_favorites: "导入收藏夹",
+      sync_settings: "云同步", enable_sync: "启用云同步", disable_sync: "关闭云同步",
+      sync_worker_url: "Worker 地址", sync_upload: "立即上传", sync_download: "从云端恢复", sync_clear: "清除云端数据",
+      export_keys: "导出密钥", import_keys: "导入密钥", set_password: "设置主密码",
+      sync_failed: "同步失败", sync_ok: "同步成功", key_exported: "密钥已导出", key_imported: "密钥已导入",
+      password_required: "请输入主密码", password_mismatch: "两次密码不一致"
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
@@ -159,7 +167,15 @@
       confirm_delete: "Delete this card?", at_least_one: "Keep at least one search engine",
       keyword_dup: "Keyword already exists", engine_name_empty: "Search engine name cannot be empty", engine_url_invalid: "Invalid search URL — must contain a %s or {query} placeholder",
       import_fail: "Import failed", import_too_large: "Backup file too large (over {n} MB)",
-      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported", save_failed: "Save failed: changes were not written. Please check browser storage settings and retry."
+      import_version: "Backup exported by a newer version — cannot import", import_ok: "Imported", save_failed: "Save failed: changes were not written. Please check browser storage settings and retry.",
+      favorites: "Favorites", favorites_empty: "No favorites yet", edit: "Edit",
+      favorites_manage: "Favorites Management", add_folder: "New Folder", add_bookmark: "Add Bookmark",
+      export_favorites: "Export Favorites", import_favorites: "Import Favorites",
+      sync_settings: "Cloud Sync", enable_sync: "Enable Cloud Sync", disable_sync: "Disable Cloud Sync",
+      sync_worker_url: "Worker URL", sync_upload: "Upload Now", sync_download: "Restore from Cloud", sync_clear: "Clear Cloud Data",
+      export_keys: "Export Keys", import_keys: "Import Keys", set_password: "Set Master Password",
+      sync_failed: "Sync failed", sync_ok: "Synced", key_exported: "Keys exported", key_imported: "Keys imported",
+      password_required: "Password required", password_mismatch: "Passwords do not match"
     }
   };
 
@@ -224,6 +240,21 @@
   let editIndex = -1;                                  // 正在编辑的卡片索引（-1 = 新增模式）
   let stateDirty = true;                               // 站点/引擎内容是否需要 sanitizeState
   let engineDirty = true;                              // 关键词索引是否需要重建
+
+  // 收藏夹：树形结构，根节点数组；节点类型 folder | bookmark
+  let favorites = [];
+  // 云同步本地配置：仅保存密钥/连接信息，不保存业务设置明文
+  let syncConfig = {
+    enabled: false,
+    workerUrl: "",
+    syncKey: "",
+    dek: null,          // CryptoKey（AES-GCM）
+    saltB64: "",
+    iterations: 310000,
+    hasPassword: false
+  };
+  let syncTimer = null;                                // 自动上传防抖 timer
+  let lastSyncedAt = null;                             // 上次成功同步时间
 
   // ============================================================
   // normalize —— 数据校验与归一化（参考建议 3.1 / 3.2）
@@ -415,13 +446,22 @@
       lang,
       colors
     };
-    if (!store.setJSON("homepage", data)) {
-      toast(t("save_failed"));
+    // 未启用云同步时，本地缓存可保证页面可用；启用后业务数据只存云端
+    if (!syncConfig.enabled) {
+      if (!store.setJSON("homepage", data)) {
+        toast(t("save_failed"));
+      }
+      store.setJSON("favorites", favorites);
+    } else {
+      try { localStorage.removeItem("homepage"); } catch (e) {}
+      try { localStorage.removeItem("favorites"); } catch (e) {}
     }
     // 迁移清理：旧版分散的 key 不再使用
     ["engines", "engineIndex", "theme", "lang"].forEach(k => {
       try { localStorage.removeItem(k); } catch (e) {}
     });
+    // 启用云同步时，加密上传到云端
+    scheduleSyncUpload();
     return data;
   }
 
@@ -1069,6 +1109,653 @@
   }
 
   // ============================================================
+  // favorites —— 收藏夹模块（文件夹树 + 书签 + 导入导出）
+  // ============================================================
+  const FAVORITE_TYPES = ["folder", "bookmark"];
+  const MAX_FAVORITES = 1000; // 收藏节点总数上限（含文件夹）
+
+  function createFavoriteId() {
+    return "fav-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  }
+
+  // 归一化单个收藏节点（递归）
+  function normalizeFavoriteNode(n) {
+    if (!n || typeof n !== "object") return null;
+    const type = FAVORITE_TYPES.includes(n.type) ? n.type : "bookmark";
+    const id = typeof n.id === "string" && n.id ? n.id : createFavoriteId();
+    const title = typeof n.title === "string" ? n.title.slice(0, MAX_NAME_LENGTH) :
+      (typeof n.name === "string" ? n.name.slice(0, MAX_NAME_LENGTH) : "");
+    const base = { id, type, title };
+    if (type === "folder") {
+      const children = Array.isArray(n.children)
+        ? n.children.map(normalizeFavoriteNode).filter(x => x !== null).slice(0, MAX_FAVORITES)
+        : [];
+      base.children = children;
+      return base;
+    }
+    const url = safeUrl(typeof n.url === "string" ? n.url.slice(0, MAX_URL_LENGTH) : "");
+    if (url === "#") return null;
+    base.url = url;
+    base.iconType = ICON_TYPES.includes(n.iconType) ? n.iconType : "auto";
+    base.icon = typeof n.icon === "string" ? n.icon.slice(0, MAX_ICON_LENGTH) : "";
+    base.tags = Array.isArray(n.tags) ? n.tags.map(t => String(t).slice(0, 50)).filter(Boolean).slice(0, 20) : [];
+    base.createdAt = typeof n.createdAt === "string" ? n.createdAt : new Date().toISOString();
+    base.updatedAt = typeof n.updatedAt === "string" ? n.updatedAt : new Date().toISOString();
+    return base;
+  }
+
+  function normalizeFavorites(list) {
+    if (!Array.isArray(list)) return [];
+    return list.map(normalizeFavoriteNode).filter(x => x !== null).slice(0, MAX_FAVORITES);
+  }
+
+  // 深度查找节点，返回 { node, parent, path }
+  function findFavoriteNode(nodes, id) {
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.id === id) return { node: n, parent: nodes, index: i, path: [n.title] };
+      if (n.type === "folder" && Array.isArray(n.children)) {
+        const found = findFavoriteNode(n.children, id);
+        if (found) {
+          found.path.unshift(n.title);
+          return found;
+        }
+      }
+    }
+    return null;
+  }
+
+  function getFavoriteFolderById(id) {
+    if (!id) return null;
+    return findFavoriteNode(favorites, id);
+  }
+
+  function addFavoriteFolder(name) {
+    const title = (name || "新建文件夹").trim().slice(0, MAX_NAME_LENGTH) || "新建文件夹";
+    const folder = { id: createFavoriteId(), type: "folder", title, children: [] };
+    favorites.push(folder);
+    saveState();
+    renderFavorites();
+    return folder;
+  }
+
+  function addFavoriteBookmark(data, parentId) {
+    const node = normalizeFavoriteNode({
+      type: "bookmark",
+      title: data.title,
+      url: data.url,
+      iconType: data.iconType || "auto",
+      icon: data.icon || "",
+      tags: data.tags || []
+    });
+    if (!node) return null;
+    if (parentId) {
+      const found = findFavoriteNode(favorites, parentId);
+      if (!found || found.node.type !== "folder") return null;
+      found.node.children.push(node);
+    } else {
+      favorites.push(node);
+    }
+    saveState();
+    renderFavorites();
+    return node;
+  }
+
+  function updateFavoriteNode(id, patch) {
+    const found = findFavoriteNode(favorites, id);
+    if (!found) return;
+    const node = found.node;
+    if (patch.title !== undefined) node.title = String(patch.title).trim().slice(0, MAX_NAME_LENGTH) || node.title;
+    if (node.type === "bookmark") {
+      if (patch.url !== undefined) {
+        const url = safeUrl(String(patch.url));
+        if (url !== "#") node.url = url;
+      }
+      if (patch.iconType !== undefined && ICON_TYPES.includes(patch.iconType)) node.iconType = patch.iconType;
+      if (patch.icon !== undefined) node.icon = String(patch.icon).slice(0, MAX_ICON_LENGTH);
+      if (patch.tags !== undefined) node.tags = Array.isArray(patch.tags) ? patch.tags.map(String).slice(0, 20) : [];
+      node.updatedAt = new Date().toISOString();
+    }
+    saveState();
+    renderFavorites();
+  }
+
+  function deleteFavoriteNode(id) {
+    const found = findFavoriteNode(favorites, id);
+    if (!found) return;
+    found.parent.splice(found.index, 1);
+    saveState();
+    renderFavorites();
+  }
+
+  function moveFavoriteNode(id, targetParentId, toIndex) {
+    const found = findFavoriteNode(favorites, id);
+    if (!found) return;
+    if (targetParentId) {
+      const target = findFavoriteNode(favorites, targetParentId);
+      if (!target || target.node.type !== "folder") return;
+      if (target.node.id === id) return;
+      // 防止移动到自己的子节点中
+      if (target.node.type === "folder" && isDescendant(target.node, id)) return;
+      found.parent.splice(found.index, 1);
+      const idx = Number.isInteger(toIndex) ? Math.max(0, Math.min(toIndex, target.node.children.length)) : target.node.children.length;
+      target.node.children.splice(idx, 0, found.node);
+    } else {
+      found.parent.splice(found.index, 1);
+      const idx = Number.isInteger(toIndex) ? Math.max(0, Math.min(toIndex, favorites.length)) : favorites.length;
+      favorites.splice(idx, 0, found.node);
+    }
+    saveState();
+    renderFavorites();
+  }
+
+  function isDescendant(node, id) {
+    if (node.type !== "folder") return false;
+    return (node.children || []).some(c => c.id === id || (c.type === "folder" && isDescendant(c, id)));
+  }
+
+  // 搜索收藏：返回匹配的书签节点及所在文件夹路径
+  function searchFavorites(query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return [];
+    const results = [];
+    function walk(nodes, path) {
+      nodes.forEach(n => {
+        if (n.type === "bookmark") {
+          const haystack = [n.title, n.url, (n.tags || []).join(" ")].join(" ").toLowerCase();
+          if (haystack.includes(q)) {
+            results.push({ node: n, path: path.concat(n.title) });
+          }
+        } else if (n.type === "folder") {
+          walk(n.children || [], path.concat(n.title));
+        }
+      });
+    }
+    walk(favorites, []);
+    return results;
+  }
+
+  // 导出收藏夹：json 或 html
+  function exportFavorites(format) {
+    const data = format === "html" ? favoritesToHtml(favorites) : JSON.stringify({ version: 1, favorites }, null, 2);
+    const blob = new Blob([data], { type: format === "html" ? "text/html" : "application/json" });
+    const a = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = format === "html" ? "favorites-" + timestamp() + ".html" : "favorites-" + timestamp() + ".json";
+    a.click();
+    if (URL.revokeObjectURL) setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  function favoritesToHtml(nodes) {
+    const lines = [];
+    lines.push("<!DOCTYPE NETSCAPE-Bookmark-file-1>");
+    lines.push("<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">");
+    lines.push("<TITLE>Bookmarks</TITLE>");
+    lines.push("<H1>Bookmarks</H1>");
+    lines.push("<DL><p>");
+    function walk(list) {
+      list.forEach(n => {
+        if (n.type === "folder") {
+          lines.push(`    <DT><H3>${escapeHtml(n.title)}</H3>`);
+          lines.push("    <DL><p>");
+          walk(n.children || []);
+          lines.push("    </DL><p>");
+        } else {
+          lines.push(`    <DT><A HREF="${escapeHtml(n.url)}">${escapeHtml(n.title)}</A>`);
+        }
+      });
+    }
+    walk(nodes);
+    lines.push("</DL><p>");
+    return lines.join("\n");
+  }
+
+  // 导入收藏夹：支持本项目 JSON 和浏览器 HTML 书签
+  function importFavoritesFile(file, mode) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const text = e.target.result;
+        const parsed = parseFavoritesImport(text, file.name);
+        if (!parsed) {
+          toast(t("import_fail"));
+          return;
+        }
+        if (mode === "merge") {
+          favorites = favorites.concat(parsed);
+        } else {
+          favorites = parsed;
+        }
+        favorites = normalizeFavorites(favorites);
+        saveState();
+        renderFavorites();
+        toast(t("import_ok"));
+      } catch (err) {
+        toast(t("import_fail"));
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function parseFavoritesImport(text, fileName) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return null;
+    // HTML 书签
+    if (/<DT|<DL|<A HREF/i.test(trimmed)) {
+      return parseHtmlBookmarks(trimmed);
+    }
+    // JSON
+    try {
+      const data = JSON.parse(trimmed);
+      const list = Array.isArray(data) ? data : data.favorites;
+      return normalizeFavorites(list);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function parseHtmlBookmarks(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const results = [];
+    function walk(container) {
+      let currentFolder = null;
+      const nodes = container.querySelectorAll(":scope > dt");
+      nodes.forEach(dt => {
+        const h3 = dt.querySelector(":scope > h3");
+        const a = dt.querySelector(":scope > a");
+        if (h3) {
+          const folder = { id: createFavoriteId(), type: "folder", title: h3.textContent.trim() || "文件夹", children: [] };
+          results.push(folder);
+          const dl = dt.querySelector(":scope > dl");
+          if (dl) {
+            const sub = [];
+            const prev = results;
+            // 简单处理：将子节点收集到 folder.children
+            collectHtmlChildren(dl, folder.children);
+          }
+        } else if (a) {
+          const url = safeUrl(a.getAttribute("href") || "");
+          if (url !== "#") {
+            results.push({
+              id: createFavoriteId(), type: "bookmark", title: a.textContent.trim() || url,
+              url, iconType: "auto", icon: "", tags: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+            });
+          }
+        }
+      });
+    }
+    function collectHtmlChildren(dl, target) {
+      dl.querySelectorAll(":scope > dt").forEach(dt => {
+        const h3 = dt.querySelector(":scope > h3");
+        const a = dt.querySelector(":scope > a");
+        if (h3) {
+          const folder = { id: createFavoriteId(), type: "folder", title: h3.textContent.trim() || "文件夹", children: [] };
+          target.push(folder);
+          const childDl = dt.querySelector(":scope > dl");
+          if (childDl) collectHtmlChildren(childDl, folder.children);
+        } else if (a) {
+          const url = safeUrl(a.getAttribute("href") || "");
+          if (url !== "#") {
+            target.push({
+              id: createFavoriteId(), type: "bookmark", title: a.textContent.trim() || url,
+              url, iconType: "auto", icon: "", tags: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+            });
+          }
+        }
+      });
+    }
+    const rootDl = doc.querySelector("dl");
+    if (rootDl) collectHtmlChildren(rootDl, results);
+    return normalizeFavorites(results);
+  }
+
+  // 收藏夹 UI 渲染（占位，后续在 UI 集成中完善）
+  function renderFavorites() {
+    const box = $("favorites-tree");
+    if (!box) return;
+    box.innerHTML = renderFavoriteNodes(favorites);
+  }
+
+  function renderFavoriteNodes(nodes) {
+    if (!Array.isArray(nodes) || !nodes.length) {
+      return '<div class="favorites-empty">' + escapeHtml(t("favorites_empty")) + "</div>";
+    }
+    return "<ul class=\"favorites-tree\">" + nodes.map(renderFavoriteNode).join("") + "</ul>";
+  }
+
+  function renderFavoriteNode(n) {
+    if (n.type === "folder") {
+      return `<li class="favorite-folder" data-id="${escapeHtml(n.id)}">
+        <div class="favorite-folder-title">
+          <span class="folder-arrow">▸</span>
+          <span class="folder-name">${escapeHtml(n.title)}</span>
+          <button data-action="add-fav-bookmark" data-parent="${escapeHtml(n.id)}">+</button>
+          <button data-action="edit-favorite" data-id="${escapeHtml(n.id)}">${escapeHtml(t("edit"))}</button>
+          <button data-action="delete-favorite" data-id="${escapeHtml(n.id)}">${escapeHtml(t("delete"))}</button>
+        </div>
+        <div class="favorite-children">${renderFavoriteNodes(n.children || [])}</div>
+      </li>`;
+    }
+    return `<li class="favorite-bookmark" data-id="${escapeHtml(n.id)}">
+      <a href="${escapeHtml(n.url)}" target="_blank" rel="noopener">${escapeHtml(n.title)}</a>
+      <button data-action="edit-favorite" data-id="${escapeHtml(n.id)}">${escapeHtml(t("edit"))}</button>
+      <button data-action="delete-favorite" data-id="${escapeHtml(n.id)}">${escapeHtml(t("delete"))}</button>
+    </li>`;
+  }
+
+  function editFavoritePrompt(id) {
+    const found = findFavoriteNode(favorites, id);
+    if (!found) return;
+    const node = found.node;
+    if (node.type === "folder") {
+      const title = prompt(t("edit"), node.title);
+      if (title) updateFavoriteNode(id, { title });
+    } else {
+      const title = prompt(t("edit") + " - " + t("card_name"), node.title);
+      const url = prompt(t("edit") + " - " + t("card_url"), node.url);
+      if (url) updateFavoriteNode(id, { title: title || node.title, url });
+    }
+  }
+
+  // ============================================================
+  // crypto —— 本地加密/解密 + 密钥管理
+  // 使用 PBKDF2-SHA256 派生 KEK，AES-256-GCM 加密业务数据和密钥包
+  // ============================================================
+  const PBKDF2_ITERATIONS = 310000;
+
+  function randomBytes(length) {
+    const bytes = new Uint8Array(length);
+    if (window.crypto && window.crypto.getRandomValues) {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return bytes;
+  }
+
+  function bytesToBase64(bytes) {
+    let bin = "";
+    bytes.forEach(b => bin += String.fromCharCode(b));
+    return btoa(bin);
+  }
+
+  function base64ToBytes(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  async function importAesKey(rawBytes) {
+    return crypto.subtle.importKey(
+      "raw",
+      rawBytes,
+      { name: "AES-GCM" },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  // 生成新的本地密钥材料：DEK + SyncKey + salt
+  async function generateKeyMaterial() {
+    const dek = randomBytes(32);
+    const syncKey = randomBytes(32);
+    const salt = randomBytes(16);
+    syncConfig.dekRawB64 = bytesToBase64(dek);
+    syncConfig.syncKeyB64 = bytesToBase64(syncKey);
+    syncConfig.saltB64 = bytesToBase64(salt);
+    syncConfig.iterations = PBKDF2_ITERATIONS;
+    syncConfig.hasPassword = false;
+    return syncConfig;
+  }
+
+  // PBKDF2-SHA256 派生 KEK
+  async function deriveKek(password, saltB64, iterations) {
+    const enc = new TextEncoder();
+    const salt = base64ToBytes(saltB64);
+    const baseKey = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(password),
+      "PBKDF2",
+      false,
+      ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt,
+        iterations: iterations || PBKDF2_ITERATIONS,
+        hash: "SHA-256"
+      },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  async function aesGcmEncrypt(key, plaintext) {
+    const iv = randomBytes(12);
+    const data = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(plaintext)
+    );
+    return {
+      v: 1,
+      alg: "AES-GCM",
+      iv: bytesToBase64(iv),
+      data: bytesToBase64(new Uint8Array(data))
+    };
+  }
+
+  async function aesGcmDecrypt(key, payload) {
+    if (!payload || payload.v !== 1 || !payload.iv || !payload.data) {
+      throw new Error("Invalid encrypted payload");
+    }
+    const iv = base64ToBytes(payload.iv);
+    const data = base64ToBytes(payload.data);
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    return new TextDecoder().decode(plain);
+  }
+
+  // 用 DEK 加密业务数据
+  async function encryptSnapshot(plaintext) {
+    const key = await importAesKey(base64ToBytes(syncConfig.dekRawB64));
+    return aesGcmEncrypt(key, plaintext);
+  }
+
+  // 用 DEK 解密业务数据
+  async function decryptSnapshot(payload) {
+    const key = await importAesKey(base64ToBytes(syncConfig.dekRawB64));
+    return aesGcmDecrypt(key, payload);
+  }
+
+  // 导出密钥包：受主密码保护（推荐）或明文导出
+  async function exportKeyPackage(password) {
+    const keyMaterial = {
+      dek: syncConfig.dekRawB64,
+      syncKey: syncConfig.syncKeyB64
+    };
+    if (password) {
+      const kek = await deriveKek(password, syncConfig.saltB64, syncConfig.iterations);
+      const encrypted = await aesGcmEncrypt(kek, JSON.stringify(keyMaterial));
+      return {
+        v: 1,
+        kdf: "PBKDF2-SHA256",
+        salt: syncConfig.saltB64,
+        iterations: syncConfig.iterations,
+        hasPassword: true,
+        encryptedKeys: encrypted
+      };
+    }
+    return {
+      v: 1,
+      hasPassword: false,
+      dek: syncConfig.dekRawB64,
+      syncKey: syncConfig.syncKeyB64
+    };
+  }
+
+  // 导入密钥包：恢复 DEK + SyncKey
+  async function importKeyPackage(pkg, password) {
+    let material;
+    if (pkg && pkg.hasPassword) {
+      if (!password) throw new Error("Password required");
+      const kek = await deriveKek(password, pkg.salt, pkg.iterations || PBKDF2_ITERATIONS);
+      const json = await aesGcmDecrypt(kek, pkg.encryptedKeys);
+      material = JSON.parse(json);
+    } else if (pkg && pkg.hasPassword === false) {
+      material = { dek: pkg.dek, syncKey: pkg.syncKey };
+    } else {
+      throw new Error("Invalid key package");
+    }
+    syncConfig.dekRawB64 = material.dek;
+    syncConfig.syncKeyB64 = material.syncKey;
+    syncConfig.saltB64 = (pkg && pkg.salt) || syncConfig.saltB64 || bytesToBase64(randomBytes(16));
+    syncConfig.iterations = (pkg && pkg.iterations) || PBKDF2_ITERATIONS;
+    syncConfig.hasPassword = !!pkg.hasPassword;
+    saveSyncConfig();
+  }
+
+  // ============================================================
+  // sync —— 云同步（Worker + S3，只传密文）
+  // ============================================================
+
+  function getSyncWorkerUrl() {
+    return syncConfig.workerUrl || "";
+  }
+
+  async function syncRequest(path, options) {
+    const base = getSyncWorkerUrl().replace(/\/+$/, "");
+    const res = await fetch(base + path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Sync-Key": syncConfig.syncKeyB64 || "",
+        ...(options && options.headers ? options.headers : {})
+      }
+    });
+    if (!res.ok) {
+      let msg = "HTTP " + res.status;
+      try { const j = await res.json(); if (j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  async function uploadSnapshot() {
+    if (!syncConfig.enabled || !getSyncWorkerUrl() || !syncConfig.dekRawB64 || !syncConfig.syncKeyB64) {
+      return false;
+    }
+    const snapshot = buildSnapshot();
+    const encrypted = await encryptSnapshot(JSON.stringify(snapshot));
+    await syncRequest("/v1/backup", {
+      method: "PUT",
+      body: JSON.stringify({ data: JSON.stringify(encrypted), updatedAt: snapshot.updatedAt })
+    });
+    lastSyncedAt = snapshot.updatedAt;
+    return true;
+  }
+
+  async function downloadSnapshot() {
+    if (!getSyncWorkerUrl() || !syncConfig.syncKeyB64) return null;
+    const res = await syncRequest("/v1/backup", { method: "GET" });
+    if (!res || !res.data) return null;
+    const encrypted = JSON.parse(res.data);
+    const plaintext = await decryptSnapshot(encrypted);
+    return JSON.parse(plaintext);
+  }
+
+  async function deleteRemoteSnapshot() {
+    if (!getSyncWorkerUrl() || !syncConfig.syncKeyB64) return false;
+    await syncRequest("/v1/backup", { method: "DELETE" });
+    return true;
+  }
+
+  async function fetchRemoteMeta() {
+    if (!getSyncWorkerUrl() || !syncConfig.syncKeyB64) return null;
+    try {
+      const res = await syncRequest("/v1/backup/meta", { method: "GET" });
+      return res.updatedAt || null;
+    } catch (e) {
+      if (e.message === "Not found") return null;
+      throw e;
+    }
+  }
+
+  function buildSnapshot() {
+    return {
+      version: 2,
+      updatedAt: new Date().toISOString(),
+      settings: {
+        sites: config.sites,
+        layout: config.layout,
+        engines,
+        engineIndex: getEngineIndex(),
+        theme,
+        lang,
+        colors
+      },
+      favorites
+    };
+  }
+
+  function applySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    if (snapshot.settings) {
+      const s = snapshot.settings;
+      config.sites = Array.isArray(s.sites) ? s.sites.slice(0, MAX_SITES).map(normalizeSite).filter(Boolean) : [];
+      config.layout = normalizeLayout(s.layout);
+      engines = normalizeEngines(s.engines) || DEFAULT_ENGINES.slice();
+      engineIndex = Number.isInteger(Number(s.engineIndex)) ? Math.max(0, Math.min(Number(s.engineIndex), engines.length - 1)) : 0;
+      theme = ["system", "light", "dark", "custom"].includes(s.theme) ? s.theme : "system";
+      lang = ["system", "zh", "en"].includes(s.lang) ? s.lang : "system";
+      colors = normalizeColors(s.colors);
+    }
+    if (Array.isArray(snapshot.favorites)) {
+      favorites = normalizeFavorites(snapshot.favorites);
+    }
+    markStateDirty();
+    markEngineDirty();
+  }
+
+  // 保存同步配置到本地（仅密钥/连接信息，不保存业务设置）
+  function saveSyncConfig() {
+    store.setJSON("sync-config", {
+      enabled: syncConfig.enabled,
+      workerUrl: syncConfig.workerUrl,
+      syncKey: syncConfig.syncKeyB64,
+      dek: syncConfig.dekRawB64,
+      salt: syncConfig.saltB64,
+      iterations: syncConfig.iterations,
+      hasPassword: syncConfig.hasPassword
+    });
+  }
+
+  function loadSyncConfig() {
+    const c = store.getJSON("sync-config");
+    if (c) {
+      syncConfig.enabled = !!c.enabled;
+      syncConfig.workerUrl = typeof c.workerUrl === "string" ? c.workerUrl : "";
+      syncConfig.syncKeyB64 = typeof c.syncKey === "string" ? c.syncKey : "";
+      syncConfig.dekRawB64 = typeof c.dek === "string" ? c.dek : "";
+      syncConfig.saltB64 = typeof c.salt === "string" ? c.salt : "";
+      syncConfig.iterations = Number(c.iterations) || PBKDF2_ITERATIONS;
+      syncConfig.hasPassword = !!c.hasPassword;
+    }
+  }
+
+  function scheduleSyncUpload() {
+    if (!syncConfig.enabled) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      uploadSnapshot().catch(() => toast(t("sync_failed")));
+    }, 800);
+  }
+
+  // ============================================================
   // data —— 数据管理与布局
   // ============================================================
 
@@ -1293,6 +1980,19 @@
           case "delete-card-menu": removeCard(index); removeCardMenu(); return;
           case "cancel-card-menu": removeCardMenu(); return;
           case "add-card": openAddCard(); return;
+          case "add-fav-bookmark": {
+            const parent = actionEl.dataset.parent || "";
+            const title = prompt(t("add_bookmark") + " - " + t("card_name"));
+            const url = prompt(t("add_bookmark") + " - " + t("card_url"));
+            if (url) addFavoriteBookmark({ title: title || url, url }, parent);
+            return;
+          }
+          case "edit-favorite": editFavoritePrompt(actionEl.dataset.id); return;
+          case "delete-favorite": {
+            const id = actionEl.dataset.id;
+            showConfirm(t("confirm_delete"), () => deleteFavoriteNode(id));
+            return;
+          }
           case "collapse": toggleCollapse(actionEl.dataset.target); return;
           case "confirm-ok": {
             if (typeof confirmCallback === "function") {
@@ -1399,6 +2099,7 @@
         syncSettingsControls();
         renderEngineList();
         renderEditor();
+        renderFavorites();
       } else {
         applyColors(); // 关闭面板时撤销未保存的颜色预览
       }
@@ -1481,6 +2182,159 @@
       renderSites();
     });
 
+    // ---- 收藏夹管理 ----
+    $("add-folder").onclick = () => {
+      const name = prompt(t("add_folder"));
+      if (name) addFavoriteFolder(name);
+    };
+    $("add-bookmark").onclick = () => {
+      const title = prompt(t("add_bookmark") + " - " + t("card_name"));
+      const url = prompt(t("add_bookmark") + " - " + t("card_url"));
+      if (url) addFavoriteBookmark({ title: title || url, url }, "");
+    };
+    $("export-favorites").onclick = () => {
+      const format = confirm(t("export_favorites") + " JSON?") ? "json" : "html";
+      exportFavorites(format);
+    };
+    $("import-favorites").addEventListener("change", function () {
+      if (this.files[0]) {
+        const mode = confirm(t("import_favorites") + " - " + t("import_ok") + "?") ? "merge" : "replace";
+        importFavoritesFile(this.files[0], mode);
+        this.value = "";
+      }
+    });
+    $("favorites-search").addEventListener("input", function () {
+      const box = $("favorites-tree");
+      if (!box) return;
+      const q = this.value.trim();
+      if (!q) { renderFavorites(); return; }
+      const results = searchFavorites(q);
+      box.innerHTML = results.length
+        ? results.map(r => `<div class="favorite-search-result">${escapeHtml(r.path.join(" / "))} - <a href="${escapeHtml(r.node.url)}" target="_blank" rel="noopener">${escapeHtml(r.node.title)}</a></div>`).join("")
+        : '<div class="favorites-empty">' + escapeHtml(t("favorites_empty")) + "</div>";
+    });
+
+    // ---- 云同步 ----
+    const workerUrlInput = $("sync-worker-url");
+    workerUrlInput.value = syncConfig.workerUrl || "";
+    workerUrlInput.addEventListener("change", function () {
+      syncConfig.workerUrl = this.value.trim();
+      saveSyncConfig();
+    });
+
+    function updateSyncButton() {
+      const btn = $("sync-enable");
+      if (!btn) return;
+      btn.querySelector("span").textContent = syncConfig.enabled ? t("disable_sync") : t("enable_sync");
+    }
+    updateSyncButton();
+
+    $("sync-enable").onclick = async () => {
+      if (!syncConfig.enabled) {
+        const url = workerUrlInput.value.trim();
+        if (!url) { toast(t("sync_worker_url")); return; }
+        if (!syncConfig.dekRawB64 || !syncConfig.syncKeyB64) {
+          await generateKeyMaterial();
+        }
+        syncConfig.workerUrl = url;
+        syncConfig.enabled = true;
+        saveSyncConfig();
+        try {
+          await uploadSnapshot();
+          toast(t("sync_ok"));
+        } catch (e) {
+          toast(t("sync_failed"));
+        }
+      } else {
+        syncConfig.enabled = false;
+        saveSyncConfig();
+      }
+      updateSyncButton();
+    };
+
+    $("sync-upload").onclick = async () => {
+      try {
+        await uploadSnapshot();
+        toast(t("sync_ok"));
+      } catch (e) {
+        toast(t("sync_failed"));
+      }
+    };
+
+    $("sync-download").onclick = async () => {
+      try {
+        const snap = await downloadSnapshot();
+        if (!snap) { toast(t("sync_failed")); return; }
+        applySnapshot(snap);
+        saveState();
+        applyI18n();
+        applyTheme();
+        applyColors();
+        syncColorPanel();
+        renderEngines();
+        renderSites();
+        renderFavorites();
+        toast(t("sync_ok"));
+      } catch (e) {
+        toast(t("sync_failed"));
+      }
+    };
+
+    $("sync-clear").onclick = async () => {
+      try {
+        await deleteRemoteSnapshot();
+        toast(t("sync_ok"));
+      } catch (e) {
+        toast(t("sync_failed"));
+      }
+    };
+
+    // ---- 密钥管理 ----
+    $("export-keys").onclick = async () => {
+      if (!syncConfig.dekRawB64 || !syncConfig.syncKeyB64) {
+        await generateKeyMaterial();
+      }
+      const password = prompt(t("set_password") + (syncConfig.hasPassword ? "" : " (" + t("password_required") + ")"));
+      const pkg = await exportKeyPackage(password || "");
+      const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = "startpage-keys-" + timestamp() + ".json";
+      a.click();
+      if (URL.revokeObjectURL) setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast(t("key_exported"));
+    };
+
+    $("import-keys").onclick = () => $("import-keys-file").click();
+    $("import-keys-file").addEventListener("change", function () {
+      const file = this.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const pkg = JSON.parse(reader.result);
+          const password = pkg.hasPassword ? prompt(t("password_required")) : "";
+          await importKeyPackage(pkg, password || "");
+          toast(t("key_imported"));
+        } catch (e) {
+          toast(t("sync_failed"));
+        }
+        this.value = "";
+      };
+      reader.readAsText(file);
+    });
+
+    $("master-password").addEventListener("change", function () {
+      const pwd = this.value;
+      if (!pwd) return;
+      if (!syncConfig.saltB64) syncConfig.saltB64 = bytesToBase64(randomBytes(16));
+      syncConfig.hasPassword = true;
+      saveSyncConfig();
+      this.value = "";
+      toast(t("sync_ok"));
+    });
+
   }
 
   function bindEvents() {
@@ -1505,16 +2359,35 @@
   async function load() {
     rebuildEngineIndex(); // 先用默认引擎建立索引，避免 fetch 完成前关键词搜索失效
     bindEvents();
-    // 统一读取：单 key 优先，旧散落 key 自动迁移；损坏 → config.json → 空配置
-    applyState(normalizeState(loadState() || await fetchConfig()));
-    saveState();  // 首次访问或迁移后落盘
-    applyI18n();  // 需在 applyState 之后：语言取自已加载的状态
-    applyTheme(); // 需在 applyState 之后：主题取自已加载的状态
-    applyColors();// 自定义配色取自已加载的状态
+    loadSyncConfig(); // 读取本地密钥/同步配置
+    let snapshot = null;
+    if (syncConfig.enabled && getSyncWorkerUrl()) {
+      try {
+        snapshot = await downloadSnapshot();
+      } catch (e) {
+        toast(t("sync_failed"));
+      }
+    }
+    if (snapshot) {
+      applySnapshot(snapshot); // 云端为权威
+    } else if (!syncConfig.enabled) {
+      // 未启用同步：使用本地缓存/默认配置
+      applyState(normalizeState(loadState() || await fetchConfig()));
+      favorites = normalizeFavorites(store.getJSON("favorites") || []);
+    } else {
+      // 启用同步但拉取失败：使用默认配置，避免展示旧缓存造成“本地仍保存”的错觉
+      applyState(normalizeState({}));
+      favorites = [];
+    }
+    saveState();  // 写入本地缓存，启用同步时触发上传
+    applyI18n();  // 需在数据加载之后：语言取已加载状态
+    applyTheme(); // 需在数据加载之后：主题取已加载状态
+    applyColors();// 自定义配色取已加载状态
     syncColorPanel(); // 主题为 custom 时显示配色配置面板
     bindSystemThemeChange(); // system 主题下实时跟随系统明暗切换
     renderEngines();
     renderSites();
+    renderFavorites();
   }
 
   // 不向 window 暴露任何函数：所有动态控件均通过事件委托处理，避免全局命名冲突

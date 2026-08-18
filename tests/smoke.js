@@ -893,6 +893,42 @@ function getToastText(win) {
   assert(!wTheme.document.body.classList.contains("dark"),
     "优化：系统切回浅色后页面实时移除 dark");
 
+  // ---- 收藏夹 + 云同步 UI ----
+  const domFav = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const wFav = domFav.window;
+  wFav.matchMedia = () => ({ matches: false });
+  wFav.fetch = window.fetch;
+  wFav.prompt = msg => String(msg).includes("网址") ? "https://example.com" : "测试站点";
+  wFav.confirm = () => true;
+  wFav.eval(appCode);
+  await waitFor(() => wFav.document.getElementById("engine").options.length === 5,
+    "收藏夹测试初始化完成");
+  assert(wFav.document.getElementById("favorites-tree"),
+    "收藏夹树容器存在");
+  assert(wFav.document.getElementById("sync-worker-url"),
+    "云同步 Worker 地址输入框存在");
+  wFav.document.getElementById("settings").click();
+  wFav.document.getElementById("add-folder").click();
+  assert(wFav.document.querySelector("#favorites-tree .favorite-folder"),
+    "添加文件夹后渲染文件夹节点");
+  wFav.document.getElementById("add-bookmark").click();
+  assert(wFav.document.querySelector("#favorites-tree .favorite-bookmark"),
+    "添加收藏后渲染书签节点");
+  const favSearch = wFav.document.getElementById("favorites-search");
+  favSearch.value = "测试";
+  favSearch.dispatchEvent(new wFav.Event("input", { bubbles: true }));
+  assert(wFav.document.querySelector(".favorite-search-result"),
+    "搜索收藏显示结果");
+  let favBlob = null;
+  const origFavCreate = wFav.URL.createObjectURL;
+  wFav.URL.createObjectURL = b => { favBlob = b; return "blob:test"; };
+  const origFavClick = wFav.HTMLAnchorElement.prototype.click;
+  wFav.HTMLAnchorElement.prototype.click = function () {};
+  wFav.document.getElementById("export-favorites").click();
+  wFav.URL.createObjectURL = origFavCreate;
+  wFav.HTMLAnchorElement.prototype.click = origFavClick;
+  assert(favBlob !== null, "导出收藏夹生成 Blob");
+
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error("测试脚本异常:", e); process.exit(1); });
