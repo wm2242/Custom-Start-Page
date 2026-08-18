@@ -38,6 +38,11 @@ function readBlobText(win, blob) {
   });
 }
 
+// 读取统一状态：避免测试中反复书写 JSON.parse(...localStorage...)
+function readState(win) {
+  return JSON.parse(win.localStorage.getItem("homepage"));
+}
+
 // 轮询等待条件成立，避免固定 setTimeout 在慢速环境下的时序性失败
 function waitFor(cond, desc, timeout = 1500) {
   return new Promise((resolve, reject) => {
@@ -103,7 +108,7 @@ function getToastText(win) {
   assert(!menu.classList.contains("open") &&
     document.getElementById("search-engine-btn").textContent === "⌄",
     "点击空白处关闭菜单并复位箭头");
-  const saved = JSON.parse(window.localStorage.getItem("homepage"));
+  const saved = readState(window);
   assert(saved.search === undefined, "search 不再单独存储（由 engines+engineIndex 派生）");
   assert(saved.engines[saved.engineIndex].url === "https://www.google.com/search?q=%s",
     "当前搜索地址 = engines[engineIndex].url（单一 key 存储）");
@@ -113,7 +118,7 @@ function getToastText(win) {
   langSel.value = "en";
   langSel.dispatchEvent(new window.Event("change"));
   assert(document.querySelector(".logo").textContent === "Custom Start Page", "切英文后标题变为英文");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).lang === "en", "语言已并入统一 key");
+  assert(readState(window).lang === "en", "语言已并入统一 key");
   langSel.value = "zh";
   langSel.dispatchEvent(new window.Event("change"));
   assert(document.querySelector(".logo").textContent === "自定义起始页", "切回中文后标题恢复");
@@ -137,7 +142,7 @@ function getToastText(win) {
   const links1 = sites.querySelectorAll("a.shortcut");
   assert(links1[0].textContent.includes("GitHub") && links1[2].textContent.includes("邮箱"),
     "拖拽后顺序变为 GitHub, YouTube, 邮箱");
-  const savedAfter = JSON.parse(window.localStorage.getItem("homepage"));
+  const savedAfter = readState(window);
   assert(savedAfter.sites[0].name === "GitHub" && savedAfter.sites[2].name === "邮箱",
     "排序结果已持久化到 localStorage");
 
@@ -145,7 +150,7 @@ function getToastText(win) {
   const engItems = document.querySelectorAll("#engine-list .engine-sort-item");
   engItems[0].dispatchEvent(dragEvent("dragstart", 0));
   engItems[2].dispatchEvent(dragEvent("drop", 0));
-  const savedEngines = JSON.parse(window.localStorage.getItem("homepage")).engines;
+  const savedEngines = readState(window).engines;
   assert(savedEngines[0].name === "Bing", "引擎拖拽后 Bing 移到第一位");
   assert(document.querySelector("#engine option").textContent === "Bing", "引擎下拉框顺序同步更新");
 
@@ -162,7 +167,7 @@ function getToastText(win) {
   siteUrl.value = "https://example.com";
   document.getElementById("save-site").click();
   assert(sites.querySelectorAll("a.shortcut").length === 5, "添加网站后网格变 5 张");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).sites.some(s => s.name === "新站点"),
+  assert(readState(window).sites.some(s => s.name === "新站点"),
     "新网站已持久化");
 
   // ---- XSS 转义 ----
@@ -177,7 +182,7 @@ function getToastText(win) {
   siteName.value = "x".repeat(300);
   siteUrl.value = "https://example.com";
   document.getElementById("save-site").click();
-  const longNameSaved = JSON.parse(window.localStorage.getItem("homepage")).sites;
+  const longNameSaved = readState(window).sites;
   assert(longNameSaved[longNameSaved.length - 1].name.length <= 100,
     "新增卡片超长名称保存时被截断（≤100）");
 
@@ -192,7 +197,7 @@ function getToastText(win) {
     .find(a => a.textContent.includes("图标安全"));
   assert(iconCard && !iconCard.innerHTML.includes("javascript:alert(1)"),
     "非法协议的自定义图标未进入 <img src>");
-  const savedIcon = JSON.parse(window.localStorage.getItem("homepage")).sites
+  const savedIcon = readState(window).sites
     .find(s => s.name === "图标安全");
   assert(savedIcon && savedIcon.iconType === "auto", "非法协议图标保存时回退为 auto 类型");
 
@@ -225,7 +230,7 @@ function getToastText(win) {
   document.getElementById("card-name").value = "改名卡片";
   document.getElementById("card-url").value = "https://renamed.example.com";
   document.getElementById("save-card").click();
-  const s = JSON.parse(window.localStorage.getItem("homepage"));
+  const s = readState(window);
   assert(s.sites.some(x => x.name === "改名卡片"), "卡片编辑保存成功");
 
   // ---- 设置面板 ----
@@ -239,7 +244,7 @@ function getToastText(win) {
   editNameInput.dispatchEvent(new window.Event("change", { bubbles: true }));
   assert(document.querySelector('#sites a.shortcut[data-index="0"] .shortcut-title').textContent === "就地改名",
     "内联编辑名称后网格卡片就地更新");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).sites[0].name === "就地改名",
+  assert(readState(window).sites[0].name === "就地改名",
     "就地更新已持久化");
   const editUrlInput = document.querySelectorAll("#card-detail-0 input")[1];
   editUrlInput.value = "https://inplace.example.com";
@@ -251,7 +256,7 @@ function getToastText(win) {
   const themeSel = document.getElementById("theme-mode");
   themeSel.value = "dark";
   themeSel.dispatchEvent(new window.Event("change"));
-  const unif = JSON.parse(window.localStorage.getItem("homepage"));
+  const unif = readState(window);
   assert(unif.theme === "dark", "主题切换写入统一 key");
   assert(window.localStorage.getItem("theme") === null, "旧 theme key 已清理");
   assert(document.body.classList.contains("dark"), "暗色主题已生效");
@@ -296,7 +301,7 @@ function getToastText(win) {
   document.getElementById("save-engine").click();
   assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
     "无查询参数的搜索地址被拒绝并提示具体文案");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5, "拒绝后引擎列表未变化");
+  assert(readState(window).engines.length === 5, "拒绝后引擎列表未变化");
 
   // 非占位符的查询 URL 同样拒绝（如 ?x=1 无法承载查询词）
   clearToast();
@@ -304,7 +309,7 @@ function getToastText(win) {
   document.getElementById("save-engine").click();
   assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
     "无占位符的查询 URL 被拒绝并提示具体文案");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5, "拒绝后引擎列表仍为 5 个");
+  assert(readState(window).engines.length === 5, "拒绝后引擎列表仍为 5 个");
 
   // 裸 ? / & 结尾的 URL 同样拒绝（强制 %s 后不再有拼接边界缺陷）
   clearToast();
@@ -317,7 +322,7 @@ function getToastText(win) {
   document.getElementById("save-engine").click();
   assert(currentToast() === "搜索地址无效，需包含 %s 或 {query} 占位符",
     "末尾 & 结尾的 URL 被拒绝");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 5,
+  assert(readState(window).engines.length === 5,
     "边界 URL 拒绝后引擎列表仍为 5 个");
 
   // 含占位符的 URL 可通过校验
@@ -326,7 +331,7 @@ function getToastText(win) {
   document.getElementById("engine-url").value = "https://example.com/search?q=%s";
   document.getElementById("save-engine").click();
   assert(currentToast() === "", "含 %s 占位符的 URL 可通过校验");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).engines.length === 6,
+  assert(readState(window).engines.length === 6,
     "占位符引擎添加成功");
 
   // ---- 3.2 导入结构损坏的数据被归一化 ----
@@ -341,13 +346,13 @@ function getToastText(win) {
   Object.defineProperty(importInput, "files", { value: [badFile], configurable: true });
   importInput.dispatchEvent(new window.Event("change"));
   await waitFor(() => {
-    try { return JSON.parse(window.localStorage.getItem("homepage")).sites.length === 0; }
+    try { return readState(window).sites.length === 0; }
     catch (e) { return false; }
   }, "导入损坏数据完成");
-  const norm = JSON.parse(window.localStorage.getItem("homepage"));
+  const norm = readState(window);
   assert(Array.isArray(norm.sites) && norm.sites.length === 0, "导入时 sites 非数组 → 归一化为空数组");
   assert(norm.layout.columns === 6 && norm.layout.hide === true, "导入时非法列数 → 回退默认 6，hide 保留");
-  const impEngines = JSON.parse(window.localStorage.getItem("homepage")).engines;
+  const impEngines = readState(window).engines;
   assert(impEngines.length === 1 && impEngines[0].name === "E1", "导入引擎跳过非法条目，只保留合法项");
 
   // ---- 3.1b 非字符串 URL 不崩溃 ----
@@ -358,10 +363,10 @@ function getToastText(win) {
   Object.defineProperty(importInput, "files", { value: [numericUrlFile], configurable: true });
   importInput.dispatchEvent(new window.Event("change"));
   await waitFor(() => {
-    try { return JSON.parse(window.localStorage.getItem("homepage")).sites.length === 0; }
+    try { return readState(window).sites.length === 0; }
     catch (e) { return false; }
   }, "导入数字 URL 完成");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).sites.length === 0,
+  assert(readState(window).sites.length === 0,
     "数字 URL 被安全丢弃，不崩溃");
 
   // ---- 7.1 导出：文件名带时间戳 + 内容含版本号 ----
@@ -391,7 +396,7 @@ function getToastText(win) {
   await waitFor(() => currentToast() !== "", "更新版本导入提示出现");
   assert(currentToast() === "备份由更新版本导出，无法导入",
     "更高版本备份被拒绝并提示具体翻译文案");
-  assert(JSON.parse(window.localStorage.getItem("homepage")).version === 2,
+  assert(readState(window).version === 2,
     "拒绝后本地数据未变（仍为当前版本）");
 
   // ---- 7.3 导入：超大文件被拒绝，不解析 ----
@@ -409,7 +414,7 @@ function getToastText(win) {
   document.getElementById("engine-name").value = "e".repeat(300);
   document.getElementById("engine-url").value = "https://example.com/search?q=%s";
   document.getElementById("save-engine").click();
-  const engSaved = JSON.parse(window.localStorage.getItem("homepage")).engines;
+  const engSaved = readState(window).engines;
   assert(engSaved.every(e => e.name.length <= 100), "新增引擎超长名称保存时被截断（≤100）");
 
   // ---- 3.1 localStorage 数据损坏 + config.json 加载失败 → 不崩溃，回退默认 ----
@@ -459,7 +464,7 @@ function getToastText(win) {
   w4.localStorage.setItem("lang", "en");
   w4.eval(appCode);
   await waitFor(() => w4.document.querySelector(".logo").textContent === "Custom Start Page", "旧数据迁移完成");
-  const migrated = JSON.parse(w4.localStorage.getItem("homepage"));
+  const migrated = readState(w4);
   assert(migrated.version === 2, "迁移后写入 version:2 的统一结构");
   assert(migrated.sites[0].name === "旧站" && migrated.engines[0].name === "旧引擎",
     "旧 homepage + engines 合并迁移");
@@ -510,13 +515,13 @@ function getToastText(win) {
   item1Keyword.value = "g"; // 与第 1 个引擎（Google, keyword=g）重复
   item1Keyword.dispatchEvent(new w5.Event("change", { bubbles: true }));
   assert(toast5.textContent === "关键词重复", "编辑引擎为重复关键词被拒绝并提示具体文案");
-  assert(JSON.parse(w5.localStorage.getItem("homepage")).engines[1].keyword === "b",
+  assert(readState(w5).engines[1].keyword === "b",
     "重复关键词未写入");
   toast5.textContent = "";
   item1Keyword.value = "zz";
   item1Keyword.dispatchEvent(new w5.Event("change", { bubbles: true }));
   assert(toast5.textContent === "" &&
-    JSON.parse(w5.localStorage.getItem("homepage")).engines[1].keyword === "zz",
+    readState(w5).engines[1].keyword === "zz",
     "不重复的关键词可正常编辑");
 
   // 8.1b 编辑引擎时清空名称 → 拒绝，避免 sanitizeState 无感知过滤该引擎
@@ -526,17 +531,17 @@ function getToastText(win) {
   nameInput5.value = "";
   nameInput5.dispatchEvent(new w5.Event("change", { bubbles: true }));
   assert(toast5.textContent === "搜索引擎名称不能为空", "清空引擎名称被拒绝并提示具体文案");
-  assert(JSON.parse(w5.localStorage.getItem("homepage")).engines.length === 5 &&
-    JSON.parse(w5.localStorage.getItem("homepage")).engines[0].name === "Google",
+  assert(readState(w5).engines.length === 5 &&
+    readState(w5).engines[0].name === "Google",
     "清空名称后引擎未被 sanitize 过滤");
 
   // 8.2 选中最后一个引擎后删除第一个 → 原选中引擎保留（索引收敛到最后一项），无失效引用
   const engineSel5 = w5.document.getElementById("engine");
   engineSel5.value = "4";
   engineSel5.dispatchEvent(new w5.Event("change"));
-  assert(JSON.parse(w5.localStorage.getItem("homepage")).engineIndex === 4, "已选中最后一个引擎");
+  assert(readState(w5).engineIndex === 4, "已选中最后一个引擎");
   w5.document.querySelector("#engine-list .engine-sort-item button").click(); // 删除第 1 个（Google）
-  const st5 = JSON.parse(w5.localStorage.getItem("homepage"));
+  const st5 = readState(w5);
   assert(st5.engines.length === 4, "删除后剩 4 个引擎");
   assert(st5.engineIndex === 3, "原选中引擎保留，索引收敛到最后一项（3）");
   assert(st5.search === undefined, "无失效的 search 引用（搜索地址由 engines[engineIndex] 派生）");
@@ -594,7 +599,7 @@ function getToastText(win) {
   w5.HTMLAnchorElement.prototype.click = origClick5;
   const exp5 = JSON.parse(await readBlobText(w5, blob5));
   assert(exp5.theme === "dark" && exp5.lang === "en", "导出包含主题与语言设置");
-  assert(exp5.engineIndex === 2, "导出包含当前搜索引擎索引（搜索设置）");
+  assert(exp5.engineIndex === 2, "导出包含默认搜索引擎索引（搜索设置）");
   assert(exp5.layout && typeof exp5.layout.columns === "number" &&
     typeof exp5.layout.hide === "boolean", "导出包含卡片布局设置（列数/隐藏）");
   assert(Array.isArray(exp5.engines) && exp5.engines.length === 4, "导出包含引擎管理数据");
@@ -658,7 +663,7 @@ function getToastText(win) {
   themeModeSel5.value = "custom";
   themeModeSel5.dispatchEvent(new w5.Event("change"));
   assert(colorForm.classList.contains("show"), "选中自定义配色后出现配置面板");
-  assert(JSON.parse(w5.localStorage.getItem("homepage")).theme === "custom",
+  assert(readState(w5).theme === "custom",
     "主题模式 custom 已持久化");
 
   // 调整颜色 → 仅实时预览，不持久化
@@ -670,12 +675,12 @@ function getToastText(win) {
   w5.document.getElementById("color-bg").dispatchEvent(new w5.Event("change", { bubbles: true }));
   assert(w5.document.body.style.getPropertyValue("--bg").trim() === "#112233",
     "调整颜色实时预览（内联变量已更新）");
-  assert(JSON.parse(w5.localStorage.getItem("homepage")).colors === null,
+  assert(readState(w5).colors === null,
     "未点保存前不持久化");
 
   // 保存 → 持久化（custom 模式下配置面板保持打开）
   w5.document.getElementById("color-save").click();
-  const colState = JSON.parse(w5.localStorage.getItem("homepage")).colors;
+  const colState = readState(w5).colors;
   assert(colState && colState.bg === "#112233" && colState.card === "#445566" &&
     colState.text === "#aabbcc" && colState.secondary === "#ddeeff" && colState.border === "#010203",
     "保存后 5 个配色持久化到统一存储");
@@ -694,7 +699,7 @@ function getToastText(win) {
 
   // 恢复默认：colors 置 null 并移除内联变量
   w5.document.getElementById("color-reset").click();
-  const afterReset = JSON.parse(w5.localStorage.getItem("homepage"));
+  const afterReset = readState(w5);
   assert(afterReset.colors === null, "恢复默认后 colors 为 null");
   assert(w5.document.body.style.getPropertyValue("--bg").trim() === "",
     "恢复默认后内联变量被移除");
@@ -713,10 +718,10 @@ function getToastText(win) {
     { value: [badColorFile], configurable: true });
   w5.document.getElementById("import-data").dispatchEvent(new w5.Event("change"));
   await waitFor(() => {
-    try { return JSON.parse(w5.localStorage.getItem("homepage")).colors === null; }
+    try { return readState(w5).colors === null; }
     catch (e) { return false; }
   }, "非法配色导入完成");
-  const afterBadColor = JSON.parse(w5.localStorage.getItem("homepage"));
+  const afterBadColor = readState(w5);
   assert(afterBadColor.colors === null, "含非法色值的配色数据被归一化为 null");
 
   // ---- 15.x 导入后主题/语言/配色立即生效（无需刷新）----
@@ -738,6 +743,155 @@ function getToastText(win) {
     "导入后语言立即生效");
   assert(w5.document.getElementById("color-form").classList.contains("show"),
     "导入 custom 主题后配置面板出现");
+
+  // ---- 项目要求：主界面不更换默认引擎；首页菜单顺序与引擎管理列表一致 ----
+  const domReq = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const wReq = domReq.window;
+  wReq.matchMedia = () => ({ matches: false });
+  wReq.fetch = window.fetch;
+  let reqNavigated = null;
+  wReq.document.addEventListener("startpage:navigate", e => { reqNavigated = e.detail.url; });
+  wReq.eval(appCode);
+  await waitFor(() => wReq.document.getElementById("engine").options.length === 5, "需求测试初始化完成");
+  const reqSearchForm = wReq.document.getElementById("search");
+  const reqSearchInput = wReq.document.getElementById("query");
+  function reqSubmit(text) {
+    reqNavigated = null;
+    reqSearchInput.value = text;
+    reqSearchForm.dispatchEvent(new wReq.Event("submit", { bubbles: true, cancelable: true }));
+    return reqNavigated;
+  }
+
+  // 初始默认 Google
+  assert(reqSubmit("hello") === "https://www.google.com/search?q=hello",
+    "需求：初始普通搜索使用默认引擎 Google");
+
+  // 打开菜单：顺序与引擎管理列表一致（不置顶），active 为默认 0
+  wReq.document.getElementById("search-engine-btn").click();
+  const reqMenuItems = Array.from(wReq.document.querySelectorAll("#search-engine-menu .search-engine-item"));
+  const reqEngineListItems = Array.from(wReq.document.querySelectorAll("#engine-list .engine-sort-item"));
+  assert(reqMenuItems.length === reqEngineListItems.length,
+    "需求：首页菜单项数量与引擎管理列表一致");
+  assert(reqMenuItems.every((el, i) => Number(el.dataset.index) === Number(reqEngineListItems[i].dataset.index)),
+    "需求：首页菜单顺序与引擎管理列表一致（不置顶）");
+  assert(reqMenuItems[0].classList.contains("active") && reqMenuItems[0].dataset.index === "0",
+    "需求：默认引擎在菜单中按原顺序高亮");
+
+  // 点击第 2 项（Bing）→ 本次使用 Bing，但不持久化默认
+  reqMenuItems[1].click();
+  assert(readState(wReq).engineIndex === 0,
+    "需求：主界面选择引擎不修改默认引擎（不持久化）");
+  assert(wReq.document.getElementById("engine").value === "0",
+    "需求：设置面板默认引擎下拉仍为默认 Google");
+  assert(reqSubmit("hello") === "https://www.bing.com/search?q=hello",
+    "需求：主界面本次选择的 Bing 立即用于普通搜索");
+
+  // 再次打开菜单：active 为本次选择 Bing，但顺序仍与列表一致（Bing 仍第二位，不置顶）
+  wReq.document.getElementById("search-engine-btn").click();
+  const reqMenuItems2 = Array.from(wReq.document.querySelectorAll("#search-engine-menu .search-engine-item"));
+  assert(reqMenuItems2[1].dataset.index === "1" && reqMenuItems2[1].classList.contains("active"),
+    "需求：本次选择高亮但仍在原顺序第二位");
+  assert(reqMenuItems2[0].dataset.index === "0" && !reqMenuItems2[0].classList.contains("active"),
+    "需求：当前引擎不置顶");
+  wReq.document.body.click();
+
+  // 设置面板修改默认引擎为 DuckDuckGo（index 2）→ 持久化
+  const reqEngineSel = wReq.document.getElementById("engine");
+  reqEngineSel.value = "2";
+  reqEngineSel.dispatchEvent(new wReq.Event("change"));
+  assert(readState(wReq).engineIndex === 2,
+    "需求：设置面板修改默认引擎会持久化");
+
+  // 由于仍存在本次临时选择 Bing，普通搜索仍走 Bing（本次选择优先于默认设置）
+  assert(reqSubmit("hello") === "https://www.bing.com/search?q=hello",
+    "需求：本次临时选择优先于默认设置（修改默认后仍用 Bing）");
+
+  // 新开页面（模拟刷新）后临时选择丢失，恢复默认 DuckDuckGo
+  const domReq2 = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const wReq2 = domReq2.window;
+  wReq2.matchMedia = () => ({ matches: false });
+  wReq2.fetch = window.fetch;
+  let reqNavigated2 = null;
+  wReq2.document.addEventListener("startpage:navigate", e => { reqNavigated2 = e.detail.url; });
+  wReq2.localStorage.setItem("homepage", wReq.localStorage.getItem("homepage"));
+  wReq2.eval(appCode);
+  await waitFor(() => wReq2.document.getElementById("engine").options.length === 5, "需求：刷新后初始化完成");
+  const reqSearchForm2 = wReq2.document.getElementById("search");
+  const reqSearchInput2 = wReq2.document.getElementById("query");
+  reqSearchInput2.value = "hello";
+  reqSearchForm2.dispatchEvent(new wReq2.Event("submit", { bubbles: true, cancelable: true }));
+  assert(reqNavigated2 === "https://duckduckgo.com/?q=hello",
+    "需求：刷新后临时选择丢失，恢复默认 DuckDuckGo");
+
+  // ---- 修改点：删除临时选中的引擎本身 → 会话回退默认 ----
+  const domDelSelf = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const wDelSelf = domDelSelf.window;
+  wDelSelf.matchMedia = () => ({ matches: false });
+  wDelSelf.fetch = window.fetch;
+  let delSelfNav = null;
+  wDelSelf.document.addEventListener("startpage:navigate", e => { delSelfNav = e.detail.url; });
+  wDelSelf.eval(appCode);
+  await waitFor(() => wDelSelf.document.getElementById("engine").options.length === 5,
+    "删除临时引擎本身测试初始化完成");
+  // 选择 Bing（index 1）为本次使用
+  wDelSelf.document.getElementById("search-engine-btn").click();
+  wDelSelf.document.querySelector('#search-engine-menu .search-engine-item[data-index="1"]').click();
+  // 删除 Bing
+  wDelSelf.document.querySelector('#engine-list .engine-sort-item[data-index="1"] button').click();
+  // 搜索应回到默认 Google
+  const delSelfForm = wDelSelf.document.getElementById("search");
+  const delSelfInput = wDelSelf.document.getElementById("query");
+  delSelfInput.value = "hello";
+  delSelfForm.dispatchEvent(new wDelSelf.Event("submit", { bubbles: true, cancelable: true }));
+  assert(delSelfNav === "https://www.google.com/search?q=hello",
+    "修改点：删除临时选中的引擎本身后，会话回退默认引擎 Google");
+
+  // ---- 修改点：删除临时选中引擎的前项 → 会话前移保持 ----
+  const domDelPrev = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const wDelPrev = domDelPrev.window;
+  wDelPrev.matchMedia = () => ({ matches: false });
+  wDelPrev.fetch = window.fetch;
+  let delPrevNav = null;
+  wDelPrev.document.addEventListener("startpage:navigate", e => { delPrevNav = e.detail.url; });
+  wDelPrev.eval(appCode);
+  await waitFor(() => wDelPrev.document.getElementById("engine").options.length === 5,
+    "删除临时引擎前项测试初始化完成");
+  // 选择 Bing（index 1）为本次使用
+  wDelPrev.document.getElementById("search-engine-btn").click();
+  wDelPrev.document.querySelector('#search-engine-menu .search-engine-item[data-index="1"]').click();
+  // 删除 Google（index 0，即临时选中项的前项）
+  wDelPrev.document.querySelector('#engine-list .engine-sort-item[data-index="0"] button').click();
+  // 搜索仍应使用 Bing（Bing 已前移到 index 0）
+  const delPrevForm = wDelPrev.document.getElementById("search");
+  const delPrevInput = wDelPrev.document.getElementById("query");
+  delPrevInput.value = "hello";
+  delPrevForm.dispatchEvent(new wDelPrev.Event("submit", { bubbles: true, cancelable: true }));
+  assert(delPrevNav === "https://www.bing.com/search?q=hello",
+    "修改点：删除临时选中引擎的前项后，会话前移仍使用 Bing");
+
+  // ---- 优化 #9：system 主题实时跟随系统明暗切换 ----
+  const domTheme = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", virtualConsole: vc });
+  const wTheme = domTheme.window;
+  const themeListeners = [];
+  const themeMql = {
+    matches: false,
+    addEventListener(type, cb) { if (type === "change") themeListeners.push(cb); }
+  };
+  wTheme.matchMedia = () => themeMql;
+  wTheme.fetch = window.fetch;
+  wTheme.eval(appCode);
+  await waitFor(() => wTheme.document.getElementById("engine").options.length === 5,
+    "系统主题监听测试初始化完成");
+  assert(!wTheme.document.body.classList.contains("dark"),
+    "优化：system 浅色初始无 dark");
+  themeMql.matches = true;
+  themeListeners.forEach(cb => cb());
+  assert(wTheme.document.body.classList.contains("dark"),
+    "优化：系统切暗色后页面实时响应 dark");
+  themeMql.matches = false;
+  themeListeners.forEach(cb => cb());
+  assert(!wTheme.document.body.classList.contains("dark"),
+    "优化：系统切回浅色后页面实时移除 dark");
 
   console.log(failures === 0 ? "\n全部通过 ✔" : `\n${failures} 项失败 ✘`);
   process.exit(failures === 0 ? 0 : 1);

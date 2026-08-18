@@ -117,7 +117,7 @@
   const I18N = {
     zh: {
       title: "自定义起始页", settings: "设置",
-      search_settings: "搜索设置", language: "语言", lang_system: "跟随系统",
+      default_engine: "默认搜索引擎", language: "语言", lang_system: "跟随系统",
       engine_manage: "搜索引擎管理", add_engine: "添加搜索引擎",
       engine_name: "搜索引擎名称", engine_url: "搜索地址", engine_keyword: "快捷关键词",
       save: "保存", cancel: "取消",
@@ -140,7 +140,7 @@
     },
     en: {
       title: "Custom Start Page", settings: "Settings",
-      search_settings: "Search Settings", language: "Language", lang_system: "System",
+      default_engine: "Default Search Engine", language: "Language", lang_system: "System",
       engine_manage: "Search Engine Management", add_engine: "Add Search Engine",
       engine_name: "Search Engine Name", engine_url: "Search URL", engine_keyword: "Shortcut Keyword",
       save: "Save", cancel: "Cancel",
@@ -172,10 +172,17 @@
     return (navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en"; // 跟随系统
   }
 
-  // 按当前语言取翻译文本；缺键时回退中文，再回退键名
-  function t(key) {
+  // 按当前语言取翻译文本；缺键时回退中文，再回退键名。
+  // 可选 params 会替换文案中的 {param} 占位符，例如 t("import_too_large", { n: 5 })
+  function t(key, params) {
     const L = curLang();
-    return (I18N[L] && I18N[L][key]) || I18N.zh[key] || key;
+    let s = (I18N[L] && I18N[L][key]) || I18N.zh[key] || key;
+    if (params) {
+      Object.keys(params).forEach(k => {
+        s = s.split("{" + k + "}").join(String(params[k]));
+      });
+    }
+    return s;
   }
 
   // 将 data-i18n 标注的静态文本应用翻译（text/title/placeholder/aria-label）
@@ -207,7 +214,8 @@
 
   let config = { sites: [], layout: Object.assign({}, defaultLayout) }; // 站点与布局
   let engines = DEFAULT_ENGINES.slice();               // 搜索引擎列表
-  let engineIndex = 0;                                 // 当前引擎索引
+  let engineIndex = 0;                                 // 默认搜索引擎索引（设置面板可修改并持久化）
+  let sessionEngineIndex = -1;                         // 本次会话临时选择的引擎索引（-1 = 使用默认；主界面选择不持久化）
   let engineKeywordIndex = new Map();                  // 小写关键词 → 引擎索引（搜索时 O(1) 定位）
   let engineKeywords = new Set();                      // 所有小写关键词集合（查重 O(1)）
   let theme = "system";                                // 主题：system/light/dark
@@ -367,6 +375,17 @@
     }
   }
 
+  // 把归一化后的数据回写到内存状态（不负责脏标记与临时选择重置）
+  function applyNormalized(data) {
+    config.sites = data.sites;
+    config.layout = data.layout;
+    engines = data.engines;
+    engineIndex = data.engineIndex;
+    theme = data.theme;
+    lang = data.lang;
+    colors = data.colors;
+  }
+
   // 写入前统一截断/限量：运行时的新增/编辑同样受 MAX_* 约束，
   // 避免"保存时不限制、刷新后才被归一化截断"的不一致（load/import 已由 normalize 处理）
   function sanitizeState() {
@@ -380,13 +399,7 @@
       lang,
       colors
     });
-    config.sites = data.sites;
-    config.layout = data.layout;
-    engines = data.engines;
-    engineIndex = data.engineIndex;
-    theme = data.theme;
-    lang = data.lang;
-    colors = data.colors;
+    applyNormalized(data);
   }
 
   // 把内存状态整体写入单一 key；顺带清理迁移前遗留的旧 key。返回写入的数据对象
@@ -437,20 +450,15 @@
 
   // 把归一化后的数据应用到内存状态
   function applyState(data) {
-    config.sites = data.sites;
-    config.layout = data.layout;
-    engines = data.engines;
-    engineIndex = data.engineIndex;
-    theme = data.theme;
-    lang = data.lang;
-    colors = data.colors;
+    applyNormalized(data);
+    sessionEngineIndex = -1; // 加载/导入后清除“本次使用”的临时选择，恢复默认引擎
     markStateDirty();
     markEngineDirty();
   }
 
-  // 当前搜索地址：由引擎列表与索引派生，永不与 engineIndex 失步（参考建议 6.2）
+  // 当前搜索地址：由引擎列表与“本次实际使用索引”派生；主界面临时选择优先于默认设置
   function currentSearch() {
-    return engines[getEngineIndex()].url;
+    return engines[getActiveEngineIndex()].url;
   }
 
   // ============================================================
@@ -503,11 +511,40 @@
     syncColorPanel();
   }
 
+  // 系统主题实时变化监听：theme=system 时无需刷新即可跟随明暗切换
+  function bindSystemThemeChange() {
+    if (!window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme:dark)");
+    if (!mql) return;
+    const handler = () => applyTheme();
+    // 兼容旧浏览器：优先 addEventListener，回退 addListener
+    if (mql.addEventListener) mql.addEventListener("change", handler);
+    else if (mql.addListener) mql.addListener(handler);
+  }
+
   // ============================================================
   // dnd —— 通用拖拽排序（事件委托版，参考建议 4.1）
   // 只在容器上绑定一次事件，内部元素增删/重建都无需重新绑定监听器：
   //   getItems() 返回可变的源数组；drop 成功后调用 commit()（保存 + 重渲染）
   // ============================================================
+
+  // 拖拽 drop 后同步移动 DOM 节点并重排 data-index（含内部控件），供网格/引擎列表/卡片编辑器共用
+  function moveItemInDom(container, from, to) {
+    const draggableItems = Array.from(container.querySelectorAll('[draggable="true"]'));
+    const fromEl = draggableItems[from];
+    const toEl = draggableItems[to];
+    if (!fromEl || !toEl) return false;
+    if (from < to) toEl.after(fromEl);
+    else toEl.before(fromEl);
+    // 移动后重新查询 DOM 顺序并重排 data-index，避免使用移动前的静态 NodeList
+    Array.from(container.querySelectorAll('[draggable="true"]'))
+      .forEach((el, idx) => {
+        el.dataset.index = idx;
+        el.querySelectorAll('[data-index]').forEach(ctl => { ctl.dataset.index = idx; });
+      });
+    return true;
+  }
+
   function attachDelegatedDragSort(container, getItems, commit) {
     container.addEventListener("dragstart", e => {
       const item = e.target.closest('[draggable="true"]'); // 编辑模式（draggable=false）不参与拖拽
@@ -540,19 +577,7 @@
       items.splice(to, 0, moved);
 
       // 同步移动对应 DOM 节点，避免 commit 中全量重建列表
-      const draggableItems = Array.from(container.querySelectorAll('[draggable="true"]'));
-      const fromEl = draggableItems[from];
-      const toEl = draggableItems[to];
-      if (fromEl && toEl) {
-        if (from < to) toEl.after(fromEl);
-        else toEl.before(fromEl);
-        // 移动后重新查询 DOM 顺序并重排 data-index（含内部控件），避免使用移动前的静态 NodeList
-        Array.from(container.querySelectorAll('[draggable="true"]'))
-          .forEach((el, idx) => {
-            el.dataset.index = idx;
-            el.querySelectorAll('[data-index]').forEach(ctl => { ctl.dataset.index = idx; });
-          });
-      }
+      moveItemInDom(container, from, to);
       commit();
     });
   }
@@ -561,14 +586,21 @@
   // engines —— 搜索引擎模块
   // ============================================================
 
-  // 读取并校验当前引擎索引（越界回退 0）
+  // 读取并校验默认引擎索引（越界回退 0）
   function getEngineIndex() {
     let i = Number(engineIndex);
     if (Number.isNaN(i) || i < 0 || i >= engines.length) i = 0;
     return i;
   }
 
-  // 设置引擎索引（越界回退 0），立即持久化，返回实际生效的索引
+  // 读取当前实际使用的引擎索引：主界面本次临时选择优先，否则使用默认引擎
+  function getActiveEngineIndex() {
+    let i = Number(sessionEngineIndex);
+    if (Number.isInteger(i) && i >= 0 && i < engines.length) return i;
+    return getEngineIndex();
+  }
+
+  // 设置默认引擎索引（越界回退 0），立即持久化，返回实际生效的索引
   function setEngineIndex(i) {
     i = Number(i);
     if (Number.isNaN(i) || i < 0 || i >= engines.length) i = 0;
@@ -605,20 +637,12 @@
     // 拖拽排序与所有动态控件均由 bindEvents 中的事件委托统一处理
   }
 
-  // 搜索框旁的引擎快捷切换菜单（当前引擎置顶）
+  // 搜索框旁的引擎快捷切换菜单：顺序始终与设置面板中的引擎管理列表一致（不置顶）
   function renderSearchEngineMenu() {
     const menu = $("search-engine-menu");
     if (!menu) return;
-    const idx = getEngineIndex();
-    const items = [];
-    engines.forEach((e, i) => {
-      if (i === idx) return;
-      items.push([i, e]);
-    });
-    items.unshift([idx, engines[idx]]);
-    menu.innerHTML = items.map(pair => {
-      const i = pair[0];
-      const e = pair[1];
+    const idx = getActiveEngineIndex();
+    menu.innerHTML = engines.map((e, i) => {
       const cls = i === idx ? "search-engine-item active" : "search-engine-item";
       return `<div class="${cls}" data-action="change-engine" data-index="${i}" role="button" tabindex="0" aria-current="${i === idx ? "true" : "false"}">${escapeHtml(e.name)}</div>`;
     }).join("");
@@ -688,15 +712,21 @@
     // 删除当前项或之后 → 保持/越界收敛，保证不会跳到错误项
     if (i < engineIndex) engineIndex--;
     else if (engineIndex >= engines.length) engineIndex = engines.length - 1;
+    // 主界面临时选择：删除其前项 → 前移保持同一引擎；删除该引擎本身 → 回退到默认引擎
+    if (sessionEngineIndex >= 0) {
+      if (i === sessionEngineIndex) sessionEngineIndex = -1;  // 临时选中项被删 → 回退默认
+      else if (i < sessionEngineIndex) sessionEngineIndex--;  // 删除其前项 → 前移保持
+    }
     markEngineDirty();
     saveState();
     renderEngines();
   }
 
-  // 切换当前搜索引擎
+  // 主界面切换搜索引擎：仅作为“本次使用”的临时选择，不修改默认引擎，也不持久化
   function changeEngine(i) {
-    const idx = setEngineIndex(i);  // 同时持久化 engineIndex
-    $("engine").value = idx;
+    i = Number(i);
+    if (Number.isNaN(i) || i < 0 || i >= engines.length) return;
+    sessionEngineIndex = i;
     setSearchMenuOpen(false); // 选择后关闭菜单并复位箭头
   }
 
@@ -1069,7 +1099,7 @@
   // 导入前先做两道防线：文件大小上限 + 备份版本号校验
   function importData(file) {
     if (file.size > MAX_IMPORT_SIZE) {
-      toast(t("import_too_large").replace("{n}", String(MAX_IMPORT_SIZE / 1024 / 1024)));
+      toast(t("import_too_large", { n: MAX_IMPORT_SIZE / 1024 / 1024 }));
       return;
     }
     const reader = new FileReader();
@@ -1244,7 +1274,8 @@
     }, true);
   }
 
-  function bindEvents() {
+  function bindGlobalDelegation() {
+
     // ---- 动态控件事件委托：所有 data-action 统一处理，无需全局函数 -------
     document.addEventListener("click", e => {
       const t = e.target;
@@ -1306,6 +1337,31 @@
       }
     });
 
+    // 原生下拉箭头随展开/关闭翻转（事件委托到 document，覆盖动态渲染的卡片图标选择框）：
+    // focusin/mousedown = 展开（箭头朝上）；change（选中）/focusout（失焦）/Escape = 关闭（箭头朝下）
+    const ARROW_SELECT = "#panel select, #card-editor select";
+    const isArrowSelect = e => !!(e.target && e.target.matches && e.target.matches(ARROW_SELECT));
+    const setArrowOpen = (el, open) => {
+      el.classList.toggle("open", open);
+      el.setAttribute("aria-expanded", String(open));
+    };
+    document.addEventListener("focusin", e => { if (isArrowSelect(e)) setArrowOpen(e.target, true); });
+    document.addEventListener("mousedown", e => { if (isArrowSelect(e)) setArrowOpen(e.target, true); });
+    document.addEventListener("change", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
+    document.addEventListener("focusout", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
+    document.addEventListener("keydown", e => {
+      if (e.key !== "Escape") return;
+      if (isArrowSelect(e)) {
+        setArrowOpen(e.target, false);
+        return;
+      }
+      // Esc 关闭自定义确认对话框（打开时）
+      const dialog = $("confirm-dialog");
+      if (dialog && !dialog.hidden) hideConfirm();
+    });
+  }
+
+  function bindDragAndContextMenu() {
     // 拖拽排序 + 卡片右键菜单：事件委托，只绑定一次（列表重建无需重新绑定）
     // 网格拖拽：DOM 已在 drop 中增量移动，这里只持久化并同步设置面板编辑器
     const commitSitesGrid = () => {
@@ -1330,7 +1386,9 @@
       e.preventDefault();
       showCardMenu(Number(link.dataset.index), e.clientX, e.clientY);
     });
+  }
 
+  function bindSettingsPanel() {
     // 设置面板开关 + 同步各控件当前值
     $("settings").onclick = () => {
       const panel = $("panel");
@@ -1358,29 +1416,6 @@
       $("engine-form").classList.remove("show");
       $("show-engine-form").setAttribute("aria-expanded", "false");
     };
-
-    // 原生下拉箭头随展开/关闭翻转（事件委托到 document，覆盖动态渲染的卡片图标选择框）：
-    // focusin/mousedown = 展开（箭头朝上）；change（选中）/focusout（失焦）/Escape = 关闭（箭头朝下）
-    const ARROW_SELECT = "#panel select, #card-editor select";
-    const isArrowSelect = e => !!(e.target && e.target.matches && e.target.matches(ARROW_SELECT));
-    const setArrowOpen = (el, open) => {
-      el.classList.toggle("open", open);
-      el.setAttribute("aria-expanded", String(open));
-    };
-    document.addEventListener("focusin", e => { if (isArrowSelect(e)) setArrowOpen(e.target, true); });
-    document.addEventListener("mousedown", e => { if (isArrowSelect(e)) setArrowOpen(e.target, true); });
-    document.addEventListener("change", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
-    document.addEventListener("focusout", e => { if (isArrowSelect(e)) setArrowOpen(e.target, false); });
-    document.addEventListener("keydown", e => {
-      if (e.key !== "Escape") return;
-      if (isArrowSelect(e)) {
-        setArrowOpen(e.target, false);
-        return;
-      }
-      // Esc 关闭自定义确认对话框（打开时）
-      const dialog = $("confirm-dialog");
-      if (dialog && !dialog.hidden) hideConfirm();
-    });
 
     // 搜索引擎下拉切换（菜单未打开时无需重绘）
     $("engine").addEventListener("change", e => {
@@ -1446,6 +1481,12 @@
       renderSites();
     });
 
+  }
+
+  function bindEvents() {
+    bindGlobalDelegation();
+    bindDragAndContextMenu();
+    bindSettingsPanel();
     bindSearchEvents();
     bindImageFallbackEvents();
   }
@@ -1471,6 +1512,7 @@
     applyTheme(); // 需在 applyState 之后：主题取自已加载的状态
     applyColors();// 自定义配色取自已加载的状态
     syncColorPanel(); // 主题为 custom 时显示配色配置面板
+    bindSystemThemeChange(); // system 主题下实时跟随系统明暗切换
     renderEngines();
     renderSites();
   }
