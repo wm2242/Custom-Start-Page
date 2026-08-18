@@ -1410,11 +1410,12 @@
     return normalizeFavorites(results);
   }
 
-  // 收藏夹 UI 渲染（占位，后续在 UI 集成中完善）
+  // 收藏夹 UI 渲染（设置面板 + 主界面共用）
   function renderFavorites() {
     const box = $("favorites-tree");
-    if (!box) return;
-    box.innerHTML = renderFavoriteNodes(favorites);
+    if (box) box.innerHTML = renderFavoriteNodes(favorites);
+    const homeBox = $("favorites-home-tree");
+    if (homeBox) homeBox.innerHTML = renderFavoriteNodes(favorites);
   }
 
   function renderFavoriteNodes(nodes) {
@@ -2213,6 +2214,19 @@
         ? results.map(r => `<div class="favorite-search-result">${escapeHtml(r.path.join(" / "))} - <a href="${escapeHtml(r.node.url)}" target="_blank" rel="noopener">${escapeHtml(r.node.title)}</a></div>`).join("")
         : '<div class="favorites-empty">' + escapeHtml(t("favorites_empty")) + "</div>";
     });
+    const homeSearch = $("favorites-home-search");
+    if (homeSearch) {
+      homeSearch.addEventListener("input", function () {
+        const box = $("favorites-home-tree");
+        if (!box) return;
+        const q = this.value.trim();
+        if (!q) { renderFavorites(); return; }
+        const results = searchFavorites(q);
+        box.innerHTML = results.length
+          ? results.map(r => `<div class="favorite-search-result">${escapeHtml(r.path.join(" / "))} - <a href="${escapeHtml(r.node.url)}" target="_blank" rel="noopener">${escapeHtml(r.node.title)}</a></div>`).join("")
+          : '<div class="favorites-empty">' + escapeHtml(t("favorites_empty")) + "</div>";
+      });
+    }
 
     // ---- 云同步 ----
     const workerUrlInput = $("sync-worker-url");
