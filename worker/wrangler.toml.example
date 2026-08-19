@@ -2,16 +2,16 @@ name = "startpage-sync-worker"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
-# S3 连接参数均为关键配置，请全部通过 `wrangler secret put` 设置，不要写入本文件或提交到仓库。
+# 所有连接/来源参数均为关键配置，请全部通过 `wrangler secret put` 设置，不要写入本文件或提交到仓库。
 # [vars] 仅放非敏感参数。
 [vars]
-CORS_ALLOWED_ORIGIN = "https://your-start.pages.dev"
 MAX_BODY_SIZE = "10485760"
 OBJECT_KEY_PREFIX = "backup/"
 
 # 必须通过 Secret 配置（不要写在这里）：
-# S3_ENDPOINT          你的 S3 兼容 endpoint（通过 Secret 设置）
-# S3_REGION            你的 S3 region（通过 Secret 设置）
+# CORS_ALLOWED_ORIGIN  允许访问的前端 Pages 域名
+# S3_ENDPOINT          你的 S3 兼容 endpoint
+# S3_REGION            你的 S3 region
 # S3_BUCKET
 # S3_ACCESS_KEY_ID
 # S3_SECRET_ACCESS_KEY

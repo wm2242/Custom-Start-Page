@@ -1,0 +1,8 @@
+name = "startpage-sync-worker"
+main = "worker/worker.js"
+compatibility_date = "2025-01-01"
+
+# 非敏感参数；敏感参数（CORS_ALLOWED_ORIGIN、S3_* 等）通过 `wrangler secret put` 配置
+[vars]
+MAX_BODY_SIZE = "10485760"
+OBJECT_KEY_PREFIX = "backup/"

@@ -6,7 +6,7 @@ const DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export default {
   async fetch(request, env) {
-    const corsOrigin = env.CORS_ALLOWED_ORIGIN || "*";
+    const corsOrigin = env.CORS_ALLOWED_ORIGIN || "";
     const corsHeaders = {
       "Access-Control-Allow-Origin": corsOrigin,
       "Access-Control-Allow-Methods": "GET,PUT,DELETE,OPTIONS",
