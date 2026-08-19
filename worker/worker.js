@@ -210,7 +210,7 @@ async function s3Headers(method, url, env, body, contentType) {
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
   const service = "s3";
-  const region = env.S3_REGION || "us-east-1";
+  const region = env.S3_REGION;
 
   const urlObj = new URL(url);
   const canonicalUri = urlObj.pathname;

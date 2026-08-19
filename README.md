@@ -65,15 +65,17 @@
    ```bash
    cd worker
    cp wrangler.toml.example wrangler.toml
-   # 编辑 wrangler.toml 填入非敏感环境变量
+   # wrangler.toml 只保留非敏感参数；S3 连接参数全部通过 Secret 注入
+   npx wrangler secret put S3_ENDPOINT
+   npx wrangler secret put S3_REGION
+   npx wrangler secret put S3_BUCKET
    npx wrangler secret put S3_ACCESS_KEY_ID
    npx wrangler secret put S3_SECRET_ACCESS_KEY
-   npx wrangler secret put S3_BUCKET
    npx wrangler deploy
    ```
 4. 在设置面板的“云同步”中输入 Worker 地址（如 `https://sync.example.workers.dev`）并启用。
 
-> 关键凭据（S3 AccessKey/Secret、Bucket）全部通过 Worker Secret 配置，不写入代码或前端。
+> S3_ENDPOINT、S3_REGION、S3_BUCKET、S3_ACCESS_KEY_ID、S3_SECRET_ACCESS_KEY 全部通过 Worker Secret 配置，不写入代码或前端。
 
 ### 4. （可选）绑定自定义域名
 
